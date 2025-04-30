@@ -469,5 +469,3 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
 });
-
-// NOTE: Card Search functionality from the original script is removed as it's integrated above.

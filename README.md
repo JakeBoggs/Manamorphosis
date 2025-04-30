@@ -1,22 +1,22 @@
-# Manamorphosis: MTG Deck Completion AI
+![Manamorphosis Logo](static/logo.png)
 
-This project uses a diffusion model to complete Magic: The Gathering (MTG) decklists based on partially provided main decks and sideboards. It also includes a feature to search for cards based on text descriptions.
+This project uses a diffusion model to complete Magic: The Gathering (MTG) decklists based on partially provided main decks and sideboards. It also includes a semantic search for cards based on text embeddings.
 
 ## Features
 
 *   **Main Deck Completion:** Given a partial list of main deck cards, the AI generates the remaining cards to complete a 60-card deck.
 *   **Sideboard Completion:** Given a completed 60-card main deck and an optional partial sideboard, the AI generates the remaining cards to complete a 15-card sideboard.
-*   **Card Search:** Find MTG cards based on a natural language description (uses Doc2Vec similarity).
+*   **Card Search:** Find cards based on a natural language description (uses Doc2Vec similarity).
 *   **Web Interface:** A Flask-based web application provides an easy-to-use interface for deck completion and card search.
 
 ## Model Details
 
 *   **Embeddings:** Card text (including mana cost, type, power/toughness, and rules text) is preprocessed and embedded into a 128-dimension vector space using a Doc2Vec model (`train_embedding_model.py`). This captures semantic similarities between cards based on their text.
 *   **Classifier:** A simple linear layer (`train_embedding_classifier.py`) is trained to map these 128-dimension embeddings back to unique card indices. This is crucial during the reverse diffusion process to identify the specific card corresponding to a generated embedding.
-*   **Diffusion Model:** A transformer-based architecture (`diffusion_model.py`) is trained to perform denoising diffusion on sets of card embeddings. The core idea involves:
+*   **Diffusion Model:** A transformer-based architecture (`diffusion_model.py`) is trained to perform denoising diffusion on sets of card embeddings.
     *   **Forward Process (Training):** Starting with a real deck (represented by card embeddings `x0`), noise is gradually added over `T` timesteps to produce noisy versions `xt`. The model learns to predict the noise added at each timestep `t`.
     *   **Reverse Process (Inference):** Starting from pure noise (`xT`), the trained model iteratively predicts the noise and subtracts it, gradually denoising the embeddings back towards a coherent deck (`x0`).
-    *   **Transformer Architecture:** The model uses transformer encoder/decoder layers to process the sequence of card embeddings. Time embeddings (sinusoidal) and mask embeddings are added to the input embeddings to inform the model about the current timestep and which cards are known vs. unknown.
+    *   **Transformer Architecture:** The model uses transformer encoder/decoder layers to process the sequence of card embeddings. Time embeddings (sinusoidal) and mask embeddings are added to the input embeddings to inform the model about the current timestep and which cards are known vs. unknown. There are no positional embeddings, allowing the model to process decks as unordered sets.
     *   **Conditioning:** During training and inference, a binary mask indicates which card slots are "known" (provided by the user) and which should be generated. The model's loss function focuses on predicting noise only for the unknown slots, and during inference, the known card embeddings are reapplied at each step to guide the generation.
     *   **Main Deck & Sideboard:** The model has distinct paths:
         *   The main deck is processed by a transformer encoder to predict noise.
@@ -64,7 +64,7 @@ pip install torch flask gensim nltk requests scipy numpy transformers beautifuls
 
 ## Data Preparation
 
-NOTE: Pre-trained models (embedding, classifier, and diffusion) are available for download to skip the training steps. You can find them here: [Google Drive Folder](https://drive.google.com/drive/folders/1ZvVbUGXa8FGzL97lplQGea2Ech7yfR-0?usp=sharing)
+NOTE: Pre-trained models (embedding, classifier, and diffusion) for 60 card constructed formats are available for download to skip the training steps. You can find them here: [Google Drive Folder](https://drive.google.com/drive/folders/1ZvVbUGXa8FGzL97lplQGea2Ech7yfR-0?usp=sharing)
 
 The following scripts need to be run *if you are not using pre-trained models* in order to prepare the necessary data and train the models.
 
@@ -102,39 +102,39 @@ The following scripts need to be run *if you are not using pre-trained models* i
 
 ## Diffusion Model Architecture (`diffusion_model.py:DiffusionModel`)
 
-The model is composed of several interconnected transformer blocks and MLPs:
+The model is composed of several interconnected transformer blocks and MLPs. Despite its complexity, the architecture is relatively efficient, containing approximately 56 million parameters, and was successfully trained on a consumer-grade laptop GPU (NVIDIA GeForce RTX 3050 with 4GB VRAM).
 
 1.  **Inputs:**
-    *   `x_t` / `sb_x_t`: Noisy card embeddings for the main deck / sideboard at timestep `t` (Shape: `[Batch, Deck/SB Size, EMB_DIM]`).
+    *   `x_t` / `sb_x_t`: Noisy card embeddings for the main deck / sideboard at timestep `t` (Shape: `[Batch, Deck/SB Size, EMB_DIM]`). The embedding dimension (`EMB_DIM`) is 128.
     *   `t`: Current diffusion timestep (Shape: `[Batch]`).
     *   `mask` / `sb_mask`: Binary masks indicating known card positions (1.0 for known, 0.0 for unknown) (Shape: `[Batch, Deck/SB Size, 1]`).
-    *   `x0` (Training only): Original main deck embeddings used for sideboard context (Shape: `[Batch, Deck Size, EMB_DIM]`).
+    *   `x0` (Training only): Original main deck embeddings used for sideboard context (Shape: `[Batch, Deck Size, EMB_DIM=128]`).
     *   `main_deck_context_encoded` (Inference only): Pre-calculated context from the main deck.
 
 2.  **Time Embeddings:**
-    *   `sinusoidal_embedding`: Generates a fixed sinusoidal embedding for the timestep `t`.
-    *   `main_time_mlp` / `sb_time_mlp`: Separate MLPs (Linear -> SiLU -> Linear) process the sinusoidal embedding to create time-specific bias vectors for the main deck and sideboard paths, respectively. Output shape: `[Batch, EMB_DIM]`. These are expanded to match the deck/sideboard size.
+    *   `sinusoidal_embedding`: Generates a fixed sinusoidal embedding for the timestep `t` (dimension `EMB_DIM=128`).
+    *   `main_time_mlp` / `sb_time_mlp`: Separate MLPs (Linear -> SiLU -> Linear) process the sinusoidal embedding to create time-specific bias vectors for the main deck and sideboard paths, respectively. Output shape: `[Batch, EMB_DIM=128]`. These are expanded to match the deck/sideboard size.
 
 3.  **Mask Embeddings:**
-    *   `main_mask_mlp` / `sb_mask_mlp`: Separate MLPs (Linear -> SiLU -> Linear) process the binary mask input to create embeddings representing known/unknown positions. Output shape: `[Batch, Deck/SB Size, EMB_DIM]`. Note the differing input/hidden dimensions (`EMB_DIM` vs `ff_dim`).
+    *   `main_mask_mlp` / `sb_mask_mlp`: Separate MLPs (Linear -> SiLU -> Linear) process the binary mask input to create embeddings representing known/unknown positions. Output shape: `[Batch, Deck/SB Size, EMB_DIM=128]`.
 
 4.  **Main Deck Path (Encoder):**
     *   The input `x_t` is combined with `main_t_emb` and `main_mask_emb` via addition.
-    *   `main_input_proj`: A Linear layer projects the combined embeddings from `EMB_DIM` to the model's internal `model_dim`.
-    *   `main_transformer_encoder`: A standard `nn.TransformerEncoder` (using `nn.TransformerEncoderLayer`) with `layers` layers processes the projected sequence.
-    *   `main_output_proj`: A Linear layer projects the result back from `model_dim` to `EMB_DIM`, predicting the noise (`main_noise_pred`).
+    *   `main_input_proj`: A Linear layer projects the combined embeddings from `EMB_DIM=128` to the model's internal `model_dim=384`.
+    *   `main_transformer_encoder`: A standard `nn.TransformerEncoder` (using `nn.TransformerEncoderLayer`) with `layers=8` processes the projected sequence.
+    *   `main_output_proj`: A Linear layer projects the result back from `model_dim=384` to `EMB_DIM=128`, predicting the noise (`main_noise_pred`).
 
 5.  **Sideboard Context Path (Encoder):**
     *   Takes the *original* main deck embeddings `x0` (during training) or the *final denoised* main deck embeddings (during inference).
-    *   `sb_context_input_proj`: Linear layer projects from `EMB_DIM` to `model_dim`.
+    *   `sb_context_input_proj`: Linear layer projects from `EMB_DIM=128` to `model_dim=384`.
     *   `sideboard_context_encoder`: A standard `nn.TransformerEncoder` with **1 layer** processes the projected main deck sequence to create the context (`sb_context_encoded`).
 
 6.  **Sideboard Decoder Path:**
     *   The input `sb_x_t` is combined with `sb_decoder_t_emb` and `sb_decoder_mask_emb` via addition.
-    *   `sb_input_proj`: Linear layer projects combined sideboard embeddings from `EMB_DIM` to `model_dim`.
+    *   `sb_input_proj`: Linear layer projects combined sideboard embeddings from `EMB_DIM=128` to `model_dim=384`.
     *   `sb_transformer_decoder`: A standard `nn.TransformerDecoder` (using `nn.TransformerDecoderLayer`) with **1 layer**. It receives the projected sideboard sequence as `tgt` and the `sb_context_encoded` as `memory`.
-    *   `sb_transformer_output`: The output sequence from the decoder is passed through *another* standard `nn.TransformerEncoder` with `sb_layers` layers for further processing.
-    *   `sb_output_proj`: Linear layer projects the result back from `model_dim` to `EMB_DIM`, predicting the sideboard noise (`sb_noise_pred`).
+    *   `sb_transformer_output`: The output sequence from the decoder is passed through *another* standard `nn.TransformerEncoder` with `sb_layers=8` layers for further processing.
+    *   `sb_output_proj`: Linear layer projects the result back from `model_dim=384` to `EMB_DIM=128`, predicting the sideboard noise (`sb_noise_pred`).
 
 ### Training Process Details
 
@@ -209,7 +209,9 @@ This will load the embeddings and print the top 5 cards most similar to "Lightni
 │   ├── card_classifier.pt        # Generated by train_embedding_classifier.py
 │   └── diffusion_model.pth       # Generated by diffusion_model.py
 ├── static/
-│   └── style.css                 # CSS for the web interface
+│   ├── style.css                 # CSS for the web interface
+│   ├── icon.png                  # Small icon
+│   └── logo.png                  # Logo image
 ├── templates/
 │   └── index.html                # HTML for the web interface
 ├── app.py                        # Flask web application

@@ -4,22 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manamorphosis</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='icon.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
     <h1>Manamorphosis</h1>
 
-    <!-- Search Section (Moved to Top) -->
     <div class="search-container">
         <div class="input-section search-input-group">
-            <input type="text" id="search-input" placeholder="Search by name or description (e.g., 'Bolt', 'Draw two cards')...">
+            <input type="text" id="search-input" placeholder="Search by exact name or description (e.g., 'Lighning Bolt', 'Draw two cards')...">
             <button id="search-button">Search</button>
         </div>
     </div>
 
     <hr>
 
-    <!-- Main Deck and Sideboard Display -->
     <div class="deck-container">
         <div class="display-section">
             <h2>Main Deck <button id="complete-button">Complete</button></h2>
