@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manamorphosis</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Manamorphosis</h1>
+
+    <!-- Search Section (Moved to Top) -->
+    <div class="search-container">
+        <div class="input-section search-input-group">
+            <input type="text" id="search-input" placeholder="Search by name or description (e.g., 'Bolt', 'Draw two cards')...">
+            <button id="search-button">Search</button>
+        </div>
+    </div>
+
+    <hr>
+
+    <!-- Main Deck and Sideboard Display -->
+    <div class="deck-container">
+        <div class="display-section">
+            <h2>Main Deck <button id="complete-button">Complete</button></h2>
+            <p id="deck-status-message"></p>
+            <div id="deck-display" class="card-list-display">
+                <p>Add cards using the search above.</p>
+            </div>
+        </div>
+        <div class="display-section sideboard-section">
+            <h2>Sideboard <button id="generate-sideboard-button" disabled>Complete</button></h2>
+            <p id="sideboard-status-message"></p>
+            <div id="sideboard-display" class="card-list-display">
+                <p>Complete the main deck first.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Search Results Modal (Initially Hidden) -->
+    <div id="search-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <h2>Search Results</h2>
+            <div id="search-results-content">
+                <!-- Search results will be populated here by JS -->
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html> 

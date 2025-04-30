@@ -1,0 +1,356 @@
+/* --- General Styles --- */
+body {
+    font-family: sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #f4f4f4;
+    color: #333;
+}
+
+h1 {
+    text-align: center;
+    color: #2c3e50;
+    margin-bottom: 30px;
+}
+
+.container, .search-container, .deck-container {
+    max-width: 1200px;
+    margin: 20px auto;
+    padding: 20px;
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.deck-container {
+    display: flex;
+    gap: 30px;
+    align-items: flex-start; /* Align tops */
+}
+
+hr {
+    border: 0;
+    height: 1px;
+    background-color: #e0e0e0;
+    margin: 40px 0;
+}
+
+button {
+    padding: 10px 15px;
+    border: none;
+    border-radius: 4px;
+    background-color: #3498db;
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+button:hover:not(:disabled) {
+    background-color: #2980b9;
+}
+
+button:disabled {
+    background-color: #bdc3c7;
+    cursor: not-allowed;
+}
+
+textarea {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    min-height: 60px;
+    box-sizing: border-box; /* Include padding and border in the element's total width and height */
+    resize: vertical;
+}
+
+/* --- Search Section --- */
+.search-container h2 {
+    margin-top: 0;
+}
+
+.search-input-group {
+    display: flex;
+    gap: 10px;
+    align-items: center; /* Align textarea and button */
+    margin-bottom: 10px;
+}
+
+.search-input-group textarea {
+    flex-grow: 1; /* Textarea takes available space */
+    min-height: 40px; /* Match button height better */
+}
+
+#search-status-message {
+    min-height: 1.2em; /* Prevent layout shifts */
+    color: #e74c3c;
+    font-size: 0.9em;
+}
+
+/* --- Deck & Sideboard Display --- */
+.display-section {
+    flex: 1; /* Each section takes equal space */
+    min-width: 300px; /* Prevent sections from becoming too narrow */
+}
+
+/* Override flex behavior for sideboard section */
+.sideboard-section {
+    flex-grow: 0; /* Don't grow */
+    flex-shrink: 0; /* Don't shrink unnecessarily */
+    flex-basis: 250px; /* Set a base width (adjust as needed) */
+    min-width: 250px; /* Override the general min-width */
+}
+
+.display-section h2 {
+    display: flex;
+    justify-content: space-between; /* Pushes button to the right */
+    align-items: center;
+    border-bottom: 2px solid #eee;
+    padding-bottom: 10px;
+    margin-top: 0;
+}
+
+.display-section h2 button {
+    font-size: 0.8em; /* Make buttons smaller */
+    padding: 6px 10px;
+}
+
+.card-list-display {
+    margin-top: 15px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); /* Responsive grid */
+    gap: 15px;
+    min-height: 100px; /* Placeholder height */
+    padding: 10px;
+    border: 1px dashed #ccc;
+    border-radius: 4px;
+    background-color: #fafafa;
+}
+
+/* Override grid for sideboard to be single column */
+#sideboard-display {
+    grid-template-columns: 1fr; /* Force single column */
+    /* Optional: Adjust max-width if needed */
+    /* max-width: 220px; /* Example: approx card width + padding */
+}
+
+#deck-status-message, #sideboard-status-message {
+    min-height: 1.2em; /* Prevent layout shifts */
+    font-size: 0.9em;
+    margin-top: 5px;
+}
+
+#deck-status-message {
+    color: #2ecc71; /* Green for success */
+}
+
+#sideboard-status-message {
+     color: #f39c12; /* Orange for ready/info */
+}
+
+/* --- Card Item Styling (Deck/Sideboard) --- */
+.card-item {
+    background-color: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    transition: box-shadow 0.2s ease;
+    position: relative; /* For potential future absolute positioning */
+}
+
+.card-item:hover {
+     box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.card-item img {
+    max-width: 90%;
+    height: auto;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    display: block; /* Remove extra space below image */
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.card-item .placeholder-image {
+    width: 90%;
+    height: 150px; /* Adjust as needed */
+    background-color: #eee;
+    border: 1px dashed #ccc;
+    color: #888;
+    font-size: 0.8em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    padding: 5px;
+    box-sizing: border-box;
+}
+
+.card-info-controls {
+    width: 100%;
+    margin-top: auto; /* Push controls to the bottom */
+}
+
+.card-info-controls p {
+    margin: 5px 0;
+    font-weight: bold;
+    font-size: 0.9em;
+    word-wrap: break-word; /* Wrap long card names */
+}
+
+.card-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+}
+
+.card-controls button {
+    padding: 4px 8px;
+    font-size: 0.9em;
+    line-height: 1;
+}
+
+.card-controls .remove-button {
+    background-color: #e74c3c;
+}
+
+.card-controls .remove-button:hover {
+    background-color: #c0392b;
+}
+
+.card-item .flip-button {
+    position: absolute; 
+    top: 5px;
+    right: 5px;
+    font-size: 0.7em;
+    padding: 3px 5px;
+    background-color: rgba(0, 0, 0, 0.6);
+    border-radius: 3px;
+}
+
+/* Generated Card Highlight */
+.card-item.generated-card {
+    border-left: 5px solid #2ecc71; /* Green bar */
+}
+
+/* --- Modal Styles --- */
+.modal {
+    display: none; /* Hidden by default */
+    position: fixed; /* Stay in place */
+    z-index: 1000; /* Sit on top */
+    left: 0;
+    top: 0;
+    width: 100%; /* Full width */
+    height: 100%; /* Full height */
+    overflow: auto; /* Enable scroll if needed */
+    background-color: rgba(0,0,0,0.6); /* Black w/ opacity */
+}
+
+.modal-content {
+    background-color: #fefefe;
+    margin: 50px auto; /* Use a fixed top/bottom margin and center horizontally */
+    padding: 25px;
+    border: 1px solid #888;
+    width: 80%; /* Could be more or less, depending on screen size */
+    max-width: 900px;
+    border-radius: 8px;
+    position: relative;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+}
+
+.close-button {
+    color: #aaa;
+    position: absolute;
+    top: 10px;
+    right: 20px;
+    font-size: 28px;
+    font-weight: bold;
+}
+
+.close-button:hover,
+.close-button:focus {
+    color: black;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+#search-results-content {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); /* Smaller cards in modal */
+    gap: 15px;
+    max-height: 65vh; /* Limit height and allow scrolling */
+    overflow-y: auto;
+    padding-top: 10px;
+}
+
+/* --- Search Result Item Styling (Modal) --- */
+.search-result-item {
+    border: 1px solid #eee;
+    border-radius: 4px;
+    padding: 8px;
+    text-align: center;
+    background-color: #fff;
+    display: flex;
+    flex-direction: column;
+}
+
+.search-result-item img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 3px;
+    margin-bottom: 5px;
+}
+
+.search-result-item .modal-placeholder {
+    height: 100px; /* Smaller placeholder */
+    font-size: 0.7em;
+    margin-bottom: 5px;
+    background-color: #f0f0f0;
+}
+
+.search-result-item p {
+    font-size: 0.8em;
+    margin: 5px 0;
+    font-weight: bold;
+    flex-grow: 1; /* Push buttons down */
+}
+
+.modal-buttons {
+    margin-top: 8px;
+    display: flex;
+    gap: 5px;
+    justify-content: center;
+}
+
+.modal-buttons button {
+    font-size: 0.8em;
+    padding: 5px 8px;
+    flex: 1; /* Buttons take equal width */
+}
+
+/* --- Input Styling --- */
+input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box; /* Include padding and border in the element's total width and height */
+    font-size: 1em; /* Ensure consistent font size */
+    height: 40px; /* Set a specific height */
+}
+
+/* Adjust styling for the input within the group */
+.search-input-group input[type="text"] {
+    flex-grow: 1; /* Input takes available space */
+    /* Remove min-height if previously set for textarea */
+} 
