@@ -1,6 +1,6 @@
 ![Manamorphosis Logo](static/logo.png)
 
-This project uses a diffusion model to complete Magic: The Gathering (MTG) decklists based on partially provided main decks and sideboards. It also includes a semantic search for cards based on text embeddings.
+A diffusion model to complete Magic: The Gathering (MTG) decklists based on partially provided main decks and sideboards. It also includes a semantic search for cards using text embeddings.
 
 ## Features
 
@@ -33,7 +33,6 @@ This project uses a diffusion model to complete Magic: The Gathering (MTG) deckl
 *   Requests
 *   Scipy
 *   Numpy
-*   Transformers (for learning rate scheduler in training)
 *   BeautifulSoup4 (for scraping)
 *   aiohttp (for scraping)
 *   tqdm (for progress bars)
@@ -41,7 +40,7 @@ This project uses a diffusion model to complete Magic: The Gathering (MTG) deckl
 You can install the required Python packages using pip:
 
 ```bash
-pip install torch flask gensim nltk requests scipy numpy transformers beautifulsoup4 aiohttp tqdm
+pip install torch flask gensim nltk requests scipy numpy beautifulsoup4 aiohttp tqdm
 ```
 
 ## Setup and Installation
@@ -64,7 +63,7 @@ pip install torch flask gensim nltk requests scipy numpy transformers beautifuls
 
 ## Data Preparation
 
-NOTE: Pre-trained models (embedding, classifier, and diffusion) for 60 card constructed formats are available for download to skip the training steps. You can find them here: [Google Drive Folder](https://drive.google.com/drive/folders/1ZvVbUGXa8FGzL97lplQGea2Ech7yfR-0?usp=sharing)
+NOTE: Pre-trained models (embedding, classifier, and diffusion) for 60 card constructed formats are available for download to skip the training steps. The model was trained on approximately 47,000 decklists scraped from MTGTop8. You can find the models here: [Google Drive Folder](https://drive.google.com/drive/folders/1ZvVbUGXa8FGzL97lplQGea2Ech7yfR-0?usp=sharing)
 
 The following scripts need to be run *if you are not using pre-trained models* in order to prepare the necessary data and train the models.
 
@@ -142,11 +141,19 @@ The model is composed of several interconnected transformer blocks and MLPs. Des
     *   When loading decks for training, only decks with exactly 60 main deck cards and 15 sideboard cards are included.
     *   Decks containing card names not found in the pre-computed embeddings (`card_embeddings.pkl`) or the classifier mapping (`card_classifier.pt`) are skipped to ensure data consistency.
 *   **Mask Generation (`diffusion_model.py:DiffusionTrainer`):**
-    *   During each training step, for every deck in the batch, multiple masks are generated (`masks_per_deck` parameter).
-    *   Each mask randomly selects a number `k` (number of cards to *keep* known) within a partitioned range of `[1, deck_size-1]`.
-    *   The actual card positions to mask (i.e., keep known) are chosen based on this `k`. The logic attempts to select entire counts of unique cards first (randomly shuffled) until `k` is reached or exceeded. If exceeding `k` by selecting a whole count, a random subset of that card's positions is chosen to exactly match `k`.
-    *   This ensures the model learns to condition on varying numbers and combinations of known cards.
-    *   Separate masks are generated for the main deck and sideboard using this logic.
+    *   During each training step, for every deck in the batch, multiple masks (`masks_per_deck` parameter) are generated for both the main deck and the sideboard.
+    *   **Main Deck Masking:**
+        *   The total number of possible known cards `k` (from 1 to 59) is partitioned across the `masks_per_deck`. Each generated mask samples a `k` value from one of these partitions. This ensures the model sees a diverse range of `k` values.
+        *   For a chosen `k`, the specific card positions to keep known (marked as 1.0 in the mask) are selected based on card popularity and a probabilistic approach:
+            *   Unique cards available to be masked are identified.
+            *   These unique cards are sampled *without replacement* based on weights derived from their pre-calculated popularity (less popular cards are slightly favored).
+            *   The algorithm iterates through the weighted, shuffled unique cards.
+            *   For each card, there's an 85% chance it attempts to mask *all* available copies of that card (up to the remaining `k` needed) and a 15% chance it attempts to mask a *random number* of available copies (between 1 and the number available, up to the remaining `k` needed).
+            *   This process continues until exactly `k` positions are marked as known.
+    *   **Sideboard Masking:**
+        *   A random target `k` value is chosen between 1 and 14 (`SIDEBOARD_SIZE - 1`).
+        *   There's a 50% chance this target `k` is set to 0.
+        *   The same card selection logic (using popularity weighting and the 85%/15% split) as the main deck is then used to select `k` sideboard card positions to keep known. If `k` is 0, no sideboard cards are marked as known.
 
 ## Running the Application
 

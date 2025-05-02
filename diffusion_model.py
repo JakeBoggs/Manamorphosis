@@ -10,7 +10,6 @@ from pathlib import Path
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
-from transformers import get_linear_schedule_with_warmup
 
 EMB_DIM = 128
 DECK_SIZE = 60
@@ -33,9 +32,13 @@ class DeckDataset(Dataset):
         self.sideboard_embeds = []
         self.sideboard_indices = []
 
+        card_counts = {}
+
         for path in Path(deck_dir).glob("*.json"):
             try:
                 deck = json.load(open(path, encoding="utf-8"))
+                cards_in_this_deck = set() # Track unique cards per deck file
+
                 # --- Main Deck Processing ---
                 main_deck_cards = deck.get("cards", [])
                 total_main = sum(e.get("count", 0) for e in main_deck_cards)
@@ -47,6 +50,7 @@ class DeckDataset(Dataset):
                 main_cards_indices = []
                 for e in main_deck_cards:
                     card_name = e["name"]
+                    cards_in_this_deck.add(card_name) # Add to set for this deck
                     vec = self.card2vec.get(card_name)
                     if vec is None:
                         raise ValueError(f"Main deck card '{card_name}' missing in embeddings")
@@ -73,6 +77,7 @@ class DeckDataset(Dataset):
                 sb_cards_indices = []
                 for e in sideboard_cards:
                     card_name = e["name"]
+                    cards_in_this_deck.add(card_name) # Add to set for this deck
                     vec = self.card2vec.get(card_name)
                     if vec is None:
                         raise ValueError(f"Sideboard card '{card_name}' missing in embeddings")
@@ -94,10 +99,27 @@ class DeckDataset(Dataset):
                 self.sideboard_embeds.append(torch.stack(sb_cards_embeds))
                 self.sideboard_indices.append(torch.tensor(sb_cards_indices, dtype=torch.long))
 
+                # Increment counts for unique cards found in this deck/sideboard
+                for card_name in cards_in_this_deck:
+                    card_counts[card_name] = card_counts.get(card_name, 0) + 1
+
             except ValueError as e:
                 print(f"Skipping deck {path.name}: {e}")
             except Exception as e:
                 print(f"Error processing deck {path.name}: {e}")
+
+        # --- Calculate Card Popularity ---
+        if not card_counts:
+            print("Warning: No cards found to calculate popularity.")
+            self.card_popularity = {}
+        else:
+            highest_sum = max(card_counts.values()) if card_counts else 1 # Avoid division by zero
+            self.card_popularity = {
+                self.card_to_idx[name]: 1.0 - ((count - 1) / highest_sum)
+                for name, count in card_counts.items()
+                if name in self.card_to_idx
+            }
+            print(f"Calculated popularity for {len(self.card_popularity)} unique card indices.")
 
     def __len__(self):
         return len(self.decks_embeds) # Length based on main decks
@@ -243,12 +265,13 @@ def cosine_beta_schedule(T, s=0.008):
     return torch.clip(betas, 0, 0.999).float()
 
 class DiffusionTrainer:
-    def __init__(self, model, device, lr, num_training_steps, weight_decay, total_epochs, T=TIMESTEPS, masks_per_deck=1):
+    def __init__(self, model, device, lr, weight_decay, total_epochs, card_popularity, T=TIMESTEPS, masks_per_deck=1):
         self.model = model.to(device)
         self.device = device
         self.T = T
         self.masks_per_deck = masks_per_deck
         self.total_epochs = total_epochs
+        self.card_popularity = card_popularity # Now maps card_idx -> popularity score
 
         beta = cosine_beta_schedule(T).to(device)
         alpha = 1.0 - beta
@@ -260,10 +283,6 @@ class DiffusionTrainer:
         self.register("sqrt_one_minus_alpha_bar", torch.sqrt(1.0 - alpha_bar))
 
         self.opt = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
-
-        self.scheduler = get_linear_schedule_with_warmup(
-            self.opt, num_warmup_steps=0, num_training_steps=num_training_steps
-        )
 
     def register(self, name, tensor):
         setattr(self, name, tensor)
@@ -283,48 +302,88 @@ class DiffusionTrainer:
         return mask_expanded * x0 + (1 - mask_expanded) * x_t, noise
 
     def _create_mask_row(self, k_target, deck_size, current_deck_indices, device):
-        """Creates a single mask row [deck_size, 1] for a given k_target."""
+        """Creates a single mask row [deck_size, 1] for a given k_target,
+           tracking available indices across passes."""
         mask_row = torch.zeros(deck_size, 1, device=device)
-        # k_target = max(1, k_target)
-        k_target = min(k_target, deck_size - 1)
+        k_target = min(k_target, deck_size) # Allow masking up to the full deck size
+        if k_target <= 0: # Handle edge case
+            return mask_row
 
-        unique_cards, counts = torch.unique(current_deck_indices, return_counts=True)
-        perm = torch.randperm(unique_cards.size(0), device=device)
-        shuffled_unique_cards = unique_cards[perm]
-        shuffled_counts = counts[perm]
+        available_mask = torch.ones(deck_size, dtype=torch.bool, device=device)
 
-        masked_indices = []
+        masked_indices_list = [] # Use list to collect tensors
         current_masked_count = 0
-        for card_idx, count in zip(shuffled_unique_cards, shuffled_counts):
-            if current_masked_count >= k_target:
-                break
-            card_positions = (current_deck_indices == card_idx).nonzero(as_tuple=True)[0]
-            count_item = count.item()
-            needed = k_target - current_masked_count
+        max_iterations = 10 # Safeguard
+        current_iteration = 0
 
-            if count_item > needed:
-                if needed > 0:
-                    perm = torch.randperm(card_positions.size(0), device=device)
-                    selected_positions = card_positions[perm[:needed]]
-                    masked_indices.append(selected_positions)
-                    current_masked_count += needed
-                break
-            else:
-                masked_indices.append(card_positions)
-                current_masked_count += count_item
-                if current_masked_count == k_target:
+        while current_masked_count < k_target and current_iteration < max_iterations and available_mask.any():
+            # --- Get unique cards available in *this specific pass* ---
+            # This needs to be done inside the loop as available_mask changes
+            current_available_indices = available_mask.nonzero(as_tuple=True)[0]
+            if len(current_available_indices) == 0: break # Should not happen based on while condition, but safety
+
+            unique_cards_in_pass, pass_inverse = torch.unique(current_deck_indices[current_available_indices], return_inverse=True)
+            if len(unique_cards_in_pass) == 0: break # No cards left to potentially mask
+
+            # --- Calculate weights for unique cards in this pass ---
+            weights = torch.tensor([
+                # Use the id->score map directly
+                0.5 + self.card_popularity.get(card_idx.item(), 1.0)
+                for card_idx in unique_cards_in_pass
+            ], device=device, dtype=torch.float)
+
+            num_to_sample = len(unique_cards_in_pass)
+            # Use multinomial sampling *without replacement* to get a weighted permutation
+            perm_indices = torch.multinomial(weights, num_samples=num_to_sample, replacement=False)
+            # perm_indices now holds indices into unique_cards_in_pass, ordered by weighted sample
+            weighted_shuffled_unique_cards = unique_cards_in_pass[perm_indices]
+
+            for card_idx in weighted_shuffled_unique_cards: # Use the new weighted order
+                if current_masked_count >= k_target:
                     break
 
-        if masked_indices:
-            final_masked_indices = torch.cat(masked_indices)
-            if len(final_masked_indices) > k_target:
-                perm = torch.randperm(final_masked_indices.size(0), device=device)
-                final_masked_indices = final_masked_indices[perm[:k_target]]
+                # Find positions of this card ONLY among AVAILABLE indices
+                potential_positions = (current_deck_indices == card_idx).nonzero(as_tuple=True)[0]
+                available_positions_mask = available_mask[potential_positions]
+                available_positions = potential_positions[available_positions_mask]
+                available_count = len(available_positions)
 
-            if len(final_masked_indices) > deck_size:
-                # This should ideally not happen if k_target is clamped correctly
-                print(f"Warning: Masking logic exceeded deck size ({len(final_masked_indices)} > {deck_size}) in _create_mask_row. Clamping.")
-                final_masked_indices = final_masked_indices[:deck_size]
+                if available_count == 0:
+                    continue # No available copies of this card left
+
+                needed = k_target - current_masked_count
+
+                if random.random() < 0.85: # Path 1: Mask all AVAILABLE copies
+                    num_to_mask_this_card = min(available_count, needed)
+                    # Select the required number from available positions
+                    perm_select = torch.randperm(available_count, device=device)[:num_to_mask_this_card]
+                    selected_positions = available_positions[perm_select]
+
+                else: # Path 2: Mask a random number of AVAILABLE copies
+                    max_can_mask = min(available_count, needed)
+                    if max_can_mask <= 0: # Should already be handled by needed check, but safety
+                        continue
+                    # Randomly choose how many to mask (1 to max_can_mask)
+                    num_to_mask_this_card = random.randint(1, max(1, max_can_mask))
+                    # Select random available positions
+                    perm_select = torch.randperm(available_count, device=device)[:num_to_mask_this_card]
+                    selected_positions = available_positions[perm_select]
+
+                if len(selected_positions) > 0:
+                    # Mark these positions as unavailable for future iterations/cards
+                    available_mask[selected_positions] = False
+                    # Add to our list of masked indices
+                    masked_indices_list.append(selected_positions)
+                    # Update the count
+                    current_masked_count += len(selected_positions)
+
+            current_iteration += 1
+
+        if current_iteration >= max_iterations and current_masked_count < k_target:
+            print(f"Warning: Reached max iterations ({max_iterations}) in _create_mask_row but only masked {current_masked_count}/{k_target} items. Proceeding with current mask.")
+
+        if masked_indices_list:
+            final_masked_indices = torch.cat(masked_indices_list)
             mask_row[final_masked_indices] = 1.0
 
         return mask_row
@@ -377,7 +436,13 @@ class DiffusionTrainer:
 
         # --- Generate Masks ---
         mask, main_ks = self._generate_mask_and_k(B, N, DECK_SIZE, x0_indices_repeated, device)
-        sb_ks = torch.randint(0, SIDEBOARD_SIZE, (BN,), device=device, dtype=torch.long)
+        # Generate random k values for sideboard (1 to SIDEBOARD_SIZE - 1)
+        sb_k_values = torch.randint(1, SIDEBOARD_SIZE, (BN,), device=device, dtype=torch.long)
+        # Create a 50/50 mask to set some k values to 0
+        sb_zero_mask = torch.randint(0, 2, (BN,), device=device, dtype=torch.long)
+        # Apply mask: ~50% become 0, ~50% keep their value (1 to SIDEBOARD_SIZE - 1)
+        sb_ks = sb_k_values * sb_zero_mask
+
         sb_mask = torch.zeros(BN, SIDEBOARD_SIZE, 1, device=device)
         for i in range(BN):
             sb_mask[i] = self._create_mask_row(sb_ks[i].item(), SIDEBOARD_SIZE, sb_x0_indices_repeated[i], device)
@@ -398,11 +463,11 @@ class DiffusionTrainer:
 
         return total_loss, main_loss, sb_loss
 
-    def train(self, train_loader, epochs, save_path):
-        step = 0
+    def train(self, train_loader, epochs, start_epoch, save_path):
         self.model.train()
 
         for epoch in range(epochs):
+            epoch += start_epoch
             pbar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
             train_loss_accum = 0.0
             main_loss_accum = 0.0
@@ -426,7 +491,6 @@ class DiffusionTrainer:
                 total_loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.opt.step()
-                self.scheduler.step()
 
                 # --- Accumulate losses --- 
                 train_loss_accum += total_loss.item()
@@ -437,11 +501,8 @@ class DiffusionTrainer:
                     "Total Loss": total_loss.item(),
                     "Main Loss": main_loss.item(),
                     "SB Loss": sb_loss.item(),
-                    "GradNorm": grad_norm.item(),
-                    "LR": self.scheduler.get_last_lr()[0]
+                    "GradNorm": grad_norm.item()
                 })
-
-                step += 1
 
             avg_train_loss = train_loss_accum / len(train_loader)
             avg_main_loss = main_loss_accum / len(train_loader)
@@ -450,9 +511,6 @@ class DiffusionTrainer:
 
             save_dict = {
                 "model": self.model.state_dict(),
-                "opt": self.opt.state_dict(),
-                "scheduler": self.scheduler.state_dict(),
-                "step": step,
                 "epoch": epoch,
                 "config": self.model.cfg
             }
@@ -460,11 +518,11 @@ class DiffusionTrainer:
 
 def main():
     parser = argparse.ArgumentParser(description="Train Diffusion Model")
-    parser.add_argument("--deck_dir", default="./data/decks")
+    parser.add_argument("--deck_dir", default="./data/new_decks")
     parser.add_argument("--embeddings", default="data/card_embeddings.pkl")
-    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=2e-5)
+    parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--save", default="models/diffusion_model.pth")
     parser.add_argument("--masks_per_deck", type=int, default=5, help="Number of different masks (k values) to generate per deck per epoch")
@@ -485,7 +543,6 @@ def main():
         torch.cuda.manual_seed_all(42)
 
     print("Loading dataset...")
-    # DeckDataset now returns 4 items
     dataset = DeckDataset(args.deck_dir, args.embeddings, args.classifier_path)
     if len(dataset) == 0:
         print("Error: Dataset is empty. Check deck directory and preprocessing.")
@@ -495,11 +552,7 @@ def main():
     train_dataset = dataset
     print(f"Using full dataset ({len(train_dataset)} samples) for training.")
 
-    # DataLoader now yields 4 items per batch
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, pin_memory=True)
-
-    num_training_steps = args.epochs * len(train_loader)
-    print(f"Total training steps for LR scheduler: {num_training_steps}")
 
     model_cfg = {
         "layers": args.num_layers,
@@ -512,12 +565,13 @@ def main():
     print(f"Diffusion Model - Main Layers: {args.num_layers}, SB Layers: {args.sb_num_layers}, Heads: {args.num_heads}, FF Dim: {args.dim_feedforward}, Model Dim: {args.model_dim}")
 
     start_epoch = 0
+
     # Initialize trainer first, then potentially load state
     trainer = DiffusionTrainer(
         model, args.device, args.lr,
-        num_training_steps,
         args.diff_weight_decay,
         args.epochs,
+        dataset.card_popularity,
         T=TIMESTEPS, masks_per_deck=args.masks_per_deck
     )
 
@@ -531,23 +585,16 @@ def main():
             model.load_state_dict(checkpoint['model'], strict=True)
             print("Model state loaded.")
 
-            # Load optimizer and scheduler state
-            trainer.opt.load_state_dict(checkpoint['opt'])
-            trainer.scheduler.load_state_dict(checkpoint['scheduler'])
-            print("Optimizer and Scheduler states loaded.")
-
             # Resume from the next epoch
             start_epoch = checkpoint.get('epoch', -1) + 1
-            trainer.model.to(args.device) # Ensure model is on the correct device after loading
-
-            print(f"Resuming training from epoch {start_epoch}. Previous step: {checkpoint.get('step', 'N/A')}")
+            del checkpoint
 
         except Exception as e:
             print(f"Error loading checkpoint: {e}. Training from scratch.")
             # Reset start epoch if loading failed
             start_epoch = 0
-            # Ensure model is on the correct device if starting fresh
-            trainer.model.to(args.device)
+        
+        trainer.model.to(args.device)
     else:
         print(f"No existing checkpoint found at {args.save}, starting training from scratch.")
         start_epoch = 0
@@ -555,10 +602,9 @@ def main():
         trainer.model.to(args.device)
 
     print(f"Starting training from epoch {start_epoch} for {args.epochs} total epochs...")
-    epochs_to_run = args.epochs - start_epoch
-    if epochs_to_run > 0:
+    if args.epochs - start_epoch > 0:
         # Pass the number of remaining epochs
-        trainer.train(train_loader, epochs_to_run, args.save)
+        trainer.train(train_loader, args.epochs, start_epoch, args.save)
     else:
         print(f"Training already completed or start_epoch ({start_epoch}) >= total epochs ({args.epochs}).")
 

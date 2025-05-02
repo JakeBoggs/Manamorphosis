@@ -81,7 +81,7 @@ class DiffusionModel(nn.Module):
             nn.SiLU(),
             nn.Linear(ff_dim, EMB_DIM),
         )
-        self.sb_time_mlp = nn.Sequential( # Renamed from sb_shared_time_mlp, only for SB Decoder
+        self.sb_time_mlp = nn.Sequential(
             nn.Linear(EMB_DIM, ff_dim),
             nn.SiLU(),
             nn.Linear(ff_dim, EMB_DIM),
@@ -178,7 +178,6 @@ class DiffusionModel(nn.Module):
         sb_noise_pred = self.sb_output_proj(sb_decoded)
         return sb_noise_pred
 
-# --- Card Classifier --- (Keep as is)
 class CardClassifier(nn.Module):
     def __init__(self, embedding_dim, num_classes):
         super(CardClassifier, self).__init__()
@@ -187,7 +186,6 @@ class CardClassifier(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-# --- Global Variables --- (Keep as is)
 diffusion_model = None
 clf_model = None
 card_embeddings = None
@@ -203,14 +201,12 @@ def load_models_and_data():
     global doc2vec_model
 
     print("Loading models and data...")
-    # Load Embeddings (Keep as is, maybe adjust path if needed)
     if not os.path.exists(EMBEDDINGS_PATH):
         raise FileNotFoundError(f"Embeddings file not found: {EMBEDDINGS_PATH}")
     with open(EMBEDDINGS_PATH, "rb") as f:
         card_embeddings = pickle.load(f)
     print(f"Loaded {len(card_embeddings)} card embeddings.")
 
-    # Load Doc2Vec Model (Keep as is)
     if not os.path.exists(DOC2VEC_MODEL_PATH):
         raise FileNotFoundError(f"Doc2Vec model file not found: {DOC2VEC_MODEL_PATH}")
     try:
@@ -221,39 +217,17 @@ def load_models_and_data():
         print(f"Error loading Doc2Vec model: {e}")
         raise
 
-    # Load Diffusion Model (Needs Update)
     if not os.path.exists(DIFFUSION_MODEL_PATH):
-         raise FileNotFoundError(f"Diffusion model checkpoint not found: {DIFFUSION_MODEL_PATH}")
+        raise FileNotFoundError(f"Diffusion model checkpoint not found: {DIFFUSION_MODEL_PATH}")
     try:
         print(f"Loading diffusion model from {DIFFUSION_MODEL_PATH}...")
         diff_ckpt = torch.load(DIFFUSION_MODEL_PATH, map_location=DEVICE)
 
-        # Check if the checkpoint has a 'config' key, otherwise assume it's just the state_dict
-        if "model" in diff_ckpt and isinstance(diff_ckpt["model"], dict):
-            model_state_dict = diff_ckpt["model"]
-             # Try to get config from checkpoint, otherwise use command-line defaults from training script
-            diff_cfg = diff_ckpt.get("config", {})
-            diff_cfg.setdefault("layers", 6) # Default from training script
-            diff_cfg.setdefault("sb_layers", 6) # Default from training script
-            diff_cfg.setdefault("heads", 8)   # Default from training script
-            diff_cfg.setdefault("dim_feedforward", 2048) # Default from training script
-            diff_cfg.setdefault("model_dim", 256) # Default internal projection dimension
-            print(f"Using diffusion model config: {diff_cfg}")
-        else:
-            # Assume older checkpoint format just contains the state dict
-            model_state_dict = diff_ckpt
-            # Use default config since it wasn't saved in the checkpoint
-            diff_cfg = {
-                "layers": 6, "sb_layers": 1, "heads": 8,
-                "dim_feedforward": 2048, "model_dim": 256
-            }
-            print("Warning: Diffusion checkpoint missing 'config' key. Using default config.")
-            print(f"Default diffusion config: {diff_cfg}")
+        model_state_dict = diff_ckpt["model"]
+        diff_cfg = diff_ckpt.get("config", {})
 
         diffusion_model = DiffusionModel(diff_cfg).to(DEVICE)
-        # Load state dict - use strict=False if architecture changed significantly
-        # between training and inference (e.g., added/removed layers)
-        missing_keys, unexpected_keys = diffusion_model.load_state_dict(model_state_dict, strict=False)
+        missing_keys, unexpected_keys = diffusion_model.load_state_dict(model_state_dict, strict=True)
         if missing_keys:
              print(f"Warning: Missing keys in diffusion model state_dict: {missing_keys}")
         if unexpected_keys:
@@ -271,9 +245,8 @@ def load_models_and_data():
         print(f"Error loading diffusion model: {e}")
         raise
 
-    # Load Classifier Model (Keep as is, maybe check path)
     if not os.path.exists(CLASSIFIER_PATH):
-         raise FileNotFoundError(f"Classifier model checkpoint not found: {CLASSIFIER_PATH}")
+        raise FileNotFoundError(f"Classifier model checkpoint not found: {CLASSIFIER_PATH}")
     try:
         print(f"Loading classifier model from {CLASSIFIER_PATH}...")
         clf_ckpt = torch.load(CLASSIFIER_PATH, map_location=DEVICE)
@@ -297,9 +270,6 @@ app.logger.setLevel(logging.INFO) # Use INFO for more details during dev/debug
 
 load_models_and_data() # Load models when the app starts
 
-# --- Helper Functions --- (Keep clean_search_text and parse_deck_input as is)
-
-# Text cleaning logic adapted from create_text_encodings.py
 reminder_remover = re.compile(r'\(.*?\)') # Match parentheses and content
 stop_words = set(stopwords.words('english'))
 # Allowed characters are not strictly enforced here as user input might be more varied,
