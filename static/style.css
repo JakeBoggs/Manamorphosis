@@ -2,7 +2,7 @@
 body {
     font-family: sans-serif;
     margin: 0;
-    padding: 20px;
+    padding: 0 20px 20px 20px;
     background-color: #f4f4f4;
     color: #333;
 }
@@ -111,8 +111,16 @@ textarea {
 }
 
 .display-section h2 button {
-    font-size: 0.8em; /* Make buttons smaller */
-    padding: 6px 10px;
+    font-size: 1.2em; /* Make icons larger */
+    padding: 5px 8px; /* Adjust padding for icons */
+    line-height: 1; /* Ensure icon vertical alignment */
+    min-width: 35px; /* Give buttons a minimum width */
+    text-align: center;
+}
+
+.display-section h2 div { /* Target the div containing the buttons */
+    display: flex;
+    gap: 5px; /* Space between buttons */
 }
 
 .card-list-display {
@@ -146,6 +154,15 @@ textarea {
 
 #sideboard-status-message {
      color: #f39c12; /* Orange for ready/info */
+}
+
+/* Style for Clear buttons */
+.clear-button {
+    background-color: #f39c12; /* Orange */
+}
+
+.clear-button:hover:not(:disabled) {
+    background-color: #e67e22; /* Darker Orange */
 }
 
 /* --- Card Item Styling (Deck/Sideboard) --- */
@@ -221,11 +238,11 @@ textarea {
 }
 
 .card-controls .remove-button {
-    background-color: #e74c3c;
+    background-color: #eee;
 }
 
 .card-controls .remove-button:hover {
-    background-color: #c0392b;
+    background-color: #b2b2b2;
 }
 
 .card-item .flip-button {
@@ -268,19 +285,14 @@ textarea {
     box-shadow: 0 5px 15px rgba(0,0,0,0.3);
 }
 
-.close-button {
+.close-button, /* Apply to both search and export modals */
+.export-close-button { 
     color: #aaa;
     position: absolute;
     top: 10px;
     right: 20px;
     font-size: 28px;
     font-weight: bold;
-}
-
-.close-button:hover,
-.close-button:focus {
-    color: black;
-    text-decoration: none;
     cursor: pointer;
 }
 
@@ -353,4 +365,118 @@ input[type="text"] {
 .search-input-group input[type="text"] {
     flex-grow: 1; /* Input takes available space */
     /* Remove min-height if previously set for textarea */
+}
+
+/* Sticky Search Bar */
+.search-container {
+    position: sticky;
+    top: 0; /* Stick to the very top */
+    z-index: 900; /* Ensure it stays above other content */
+    /* Keep the background white so content below doesn't show through */
+    background-color: #fff; 
+    /* Add a bottom border to visually separate it when sticky */
+    border-bottom: 1px solid #e0e0e0;
+    /* Readjust padding slightly if needed when sticky */
+    padding-top: 15px;
+    padding-bottom: 15px;
+}
+
+/* New Container for Title + Export Button */
+.title-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    max-width: 1200px; /* Match other containers */
+    margin: 20px auto 0 auto; /* Add margin bottom */
+    padding: 0 20px; /* Match container padding */
+    gap: 15px; /* Add gap between title, controls, and button */
+}
+
+.title-container h1 {
+    margin-bottom: 0; /* Remove default h1 margin */
+    margin-top: 0;
+}
+
+/* Style for Export Button */
+#export-deck-button {
+    padding: 8px 15px;
+    background-color: #16a085; /* Teal color */
+    font-size: 0.9em;
+}
+
+#export-deck-button:hover:not(:disabled) {
+    background-color: #117a65;
+}
+
+/* New Controls Container */
+.controls-container {
+    /* Keep if any specific styling needed, otherwise can remove */
+    display: flex; /* Keep flex for internal alignment if needed */
+    align-items: center;
+}
+
+.format-selector label {
+    margin-right: 8px;
+    font-weight: bold;
+}
+
+.format-selector select {
+    padding: 5px 8px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 0.9em;
+}
+
+/* --- Export Modal Styles --- */
+#export-modal .modal-content {
+    /* Can inherit most styles from .modal-content */
+    width: 60%; /* Adjust width as needed */
+    max-width: 500px;
+}
+
+#export-modal h2 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+#export-modal p {
+    margin-bottom: 10px;
+    font-size: 0.9em;
+    text-align: center;
+}
+
+#export-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-family: monospace; /* Good for code/text */
+    font-size: 0.9em;
+    background-color: #f9f9f9;
+    resize: none; /* Don't allow user resizing */
+    margin-bottom: 15px;
+}
+
+#export-modal .export-close-button {
+    /* Inherit base .close-button styles */
+    /* Specific overrides if needed */
+    /* This rule can be removed now if no overrides */
+}
+
+#copy-export-button {
+    display: block; /* Center the button */
+    margin: 0 auto;
+    background-color: #2ecc71; /* Green */
+}
+
+#copy-export-button:hover:not(:disabled) {
+     background-color: #27ae60;
+}
+
+/* --- Search Result Item Styling (Modal) --- */
+.search-result-item {
+    padding-top: 15px;
+    padding-bottom: 15px;
 } 

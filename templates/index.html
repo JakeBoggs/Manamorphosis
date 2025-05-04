@@ -8,7 +8,23 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <h1>Manamorphosis</h1>
+    <div class="title-container">
+        <h1>Manamorphosis</h1>
+        <div class="controls-container">
+            <div class="format-selector">
+                <label for="format-select">Format:</label>
+                <select id="format-select">
+                    <option value="standard">Standard</option>
+                    <option value="pioneer">Pioneer</option>
+                    <option value="modern" selected>Modern</option>
+                    <option value="legacy">Legacy</option>
+                    <option value="vintage">Vintage</option>
+                    <option value="pauper">Pauper</option>
+                </select>
+            </div>
+        </div>
+        <button id="export-deck-button" title="Export Decklist">📤 Export</button>
+    </div>
 
     <div class="search-container">
         <div class="input-section search-input-group">
@@ -21,14 +37,26 @@
 
     <div class="deck-container">
         <div class="display-section">
-            <h2>Main Deck <button id="complete-button">Complete</button></h2>
+            <h2>
+                Main Deck
+                <div>
+                    <button id="complete-button" title="Complete Deck">✅</button>
+                    <button id="clear-deck-button" class="clear-button" title="Clear Deck">❌</button>
+                </div>
+            </h2>
             <p id="deck-status-message"></p>
             <div id="deck-display" class="card-list-display">
                 <p>Add cards using the search above.</p>
             </div>
         </div>
         <div class="display-section sideboard-section">
-            <h2>Sideboard <button id="generate-sideboard-button" disabled>Complete</button></h2>
+            <h2>
+                Sideboard
+                <div>
+                    <button id="generate-sideboard-button" title="Generate Sideboard" disabled>✅</button>
+                    <button id="clear-sideboard-button" class="clear-button" title="Clear Sideboard">❌</button>
+                </div>
+            </h2>
             <p id="sideboard-status-message"></p>
             <div id="sideboard-display" class="card-list-display">
                 <p>Complete the main deck first.</p>
@@ -44,6 +72,17 @@
             <div id="search-results-content">
                 <!-- Search results will be populated here by JS -->
             </div>
+        </div>
+    </div>
+
+    <!-- Export Deck Modal (Initially Hidden) -->
+    <div id="export-modal" class="modal">
+        <div class="modal-content">
+            <span class="export-close-button">&times;</span>
+            <h2>Export Decklist</h2>
+            <p>Copy the text below:</p>
+            <textarea id="export-textarea" readonly rows="15"></textarea>
+             <button id="copy-export-button" title="Copy to Clipboard">📋 Copy</button>
         </div>
     </div>
 

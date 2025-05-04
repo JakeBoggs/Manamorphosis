@@ -34,7 +34,6 @@ EMBEDDINGS_PATH = os.path.join(MODEL_DIR, "data/card_embeddings.pkl") # Adjusted
 DOC2VEC_MODEL_PATH = os.path.join(MODEL_DIR, "models/embedding_model")
 
 SCRYFALL_API_BASE = "https://api.scryfall.com"
-SCRYFALL_REQUEST_DELAY = 0.1 # Scryfall asks for 50-100ms delay between requests
 
 # Model & Inference Constants
 EMB_DIM = 128
@@ -43,6 +42,9 @@ SIDEBOARD_SIZE = 15 # Added constant
 TIMESTEPS = 1000
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
+
+ALLOWED_FORMATS = {'standard', 'pioneer', 'modern', 'legacy', 'vintage', 'pauper'}
+DEFAULT_FORMAT = 'modern'
 
 def cosine_beta_schedule(T, s=0.008):
     """Cosine variance schedule"""
@@ -198,9 +200,13 @@ doc2vec_model = None
 def load_models_and_data():
     global diffusion_model, clf_model, card_embeddings, idx_to_card
     global diffusion_beta, diffusion_alpha, diffusion_alpha_bar
-    global doc2vec_model
+    global doc2vec_model, cards
 
     print("Loading models and data...")
+
+    with open('data/AtomicCards.json', 'r', encoding='utf-8') as f:
+        cards = json.load(f)['data']
+
     if not os.path.exists(EMBEDDINGS_PATH):
         raise FileNotFoundError(f"Embeddings file not found: {EMBEDDINGS_PATH}")
     with open(EMBEDDINGS_PATH, "rb") as f:
@@ -330,24 +336,28 @@ def parse_deck_input(deck_text):
 
 # --- Inference Function (Main Deck Completion Only) ---
 @torch.no_grad()
-def run_inference(known_cards_list):
+def run_inference(known_cards_list, format):
     """
-    Runs diffusion model inference to complete the main deck, preserving known cards.
+    Runs diffusion model inference to complete the main deck and preserving known cards.
 
     Args:
         known_cards_list (list): [{'name': '...', 'count': ...}, ...] for main deck.
+        format (str): The selected game format (e.g., 'modern').
 
     Returns:
         list: Completed main deck list: [{'name': ..., 'count': ..., 'image_url': ...}]
     """
-    current_app.logger.info(f"Running main deck inference for known_cards: {known_cards_list}")
+    current_app.logger.info(f"Running main deck inference for known_cards: {known_cards_list}, format: {format}")
 
     if diffusion_model is None or clf_model is None or card_embeddings is None or idx_to_card is None:
          raise RuntimeError("Models or data not loaded properly for inference.")
 
-    # 1. Prepare known main deck embeddings and mask
-    known_emb = torch.zeros(1, DECK_SIZE, EMB_DIM, device=DEVICE)
-    known_mask = torch.zeros(1, DECK_SIZE, 1, device=DEVICE)
+    # --- Constants for Refinement ---
+    MAX_REFINEMENT_ITERATIONS = 3
+
+    # 1. Prepare *Initial* known main deck embeddings and mask
+    initial_known_emb = torch.zeros(1, DECK_SIZE, EMB_DIM, device=DEVICE)
+    initial_known_mask = torch.zeros(1, DECK_SIZE, 1, device=DEVICE)
     original_known_names = []
     current_idx = 0
     total_known_count = 0
@@ -363,70 +373,236 @@ def run_inference(known_cards_list):
 
         for _ in range(count):
             if current_idx < DECK_SIZE:
-                known_emb[0, current_idx] = vec
-                known_mask[0, current_idx] = 1.0
+                initial_known_emb[0, current_idx] = vec
+                initial_known_mask[0, current_idx] = 1.0
                 original_known_names.append(name)
                 current_idx += 1
             else:
                 current_app.logger.warning(f"Input deck exceeds {DECK_SIZE} cards. Truncating.")
+                total_known_count = DECK_SIZE # Adjust count if truncated
                 break
         if current_idx >= DECK_SIZE:
             break
 
-    num_unknown_main = DECK_SIZE - total_known_count
-    if num_unknown_main < 0:
-         current_app.logger.error(f"Error: total_known_count ({total_known_count}) > DECK_SIZE ({DECK_SIZE})")
-         raise ValueError("Input deck size exceeds maximum allowed.")
+    num_unknown_initial = DECK_SIZE - total_known_count
+    if num_unknown_initial < 0:
+         # This case implies truncation or error
+         current_app.logger.warning(f"Known main deck cards ({total_known_count}) exceeded DECK_SIZE ({DECK_SIZE}). Assuming full deck provided.")
+         num_unknown_initial = 0
 
-    current_app.logger.info(f"Prepared known main deck embeddings for {total_known_count} cards. Generating {num_unknown_main} main deck cards.")
+    current_app.logger.info(f"Prepared initial known main deck embeddings for {total_known_count} cards. Initially generating {num_unknown_initial} cards.")
 
-    # 2. Initialize Noise for Main Deck
-    x = torch.randn(1, DECK_SIZE, EMB_DIM, device=DEVICE)
-    x = known_mask * known_emb + (1 - known_mask) * x # Initialize main deck (noise in unknown slots)
+    # --- Iterative Refinement ---
+    current_x0_main = None
+    current_mask = initial_known_mask.clone()
+    current_known_emb = initial_known_emb.clone()
 
-    # 3. Run Main Deck Diffusion Sampling Loop
-    for t in reversed(range(TIMESTEPS)):
-        t_tensor = torch.full((1,), t, device=DEVICE, dtype=torch.long)
+    for refinement_iter in range(MAX_REFINEMENT_ITERATIONS + 1):
+        current_app.logger.info(f"--- Starting Main Deck Generation/Refinement Iteration {refinement_iter} ---")
 
-        # Predict noise for main deck using the dedicated method
-        main_noise_pred = diffusion_model.predict_main_noise(x, t_tensor, known_mask)
+        # Slots unknown at the start of *this iteration*
+        unknown_mask_flat_this_iter = (current_mask[0, :, 0] == 0)
+        num_unknown_this_iter = int(unknown_mask_flat_this_iter.sum().item())
 
-        # Get diffusion parameters for timestep t
-        beta_t = diffusion_beta[t].to(DEVICE)
-        alpha_t = diffusion_alpha[t].to(DEVICE)
-        alpha_bar_t = diffusion_alpha_bar[t].to(DEVICE)
-        sqrt_alpha_t = alpha_t.sqrt()
-        sqrt_one_minus_alpha_bar_t = (1.0 - alpha_bar_t).sqrt()
+        # If no slots are unknown in this iteration, stop early
+        if num_unknown_this_iter == 0 and refinement_iter > 0: # Check needed only after first iter
+             current_app.logger.info(f"Iteration {refinement_iter}: No unknown slots left to refine. Stopping.")
+             break
+        elif num_unknown_initial == 0 and refinement_iter == 0: # Handle case where deck was full initially
+             current_app.logger.info("Initial deck was full, skipping refinement loop.")
+             # Need to set current_x0_main to the initial state if loop is skipped
+             current_x0_main = initial_known_emb.clone()
+             break
 
-        # Calculate mean for main deck
-        mean_main = (1.0 / sqrt_alpha_t) * (x - (beta_t / sqrt_one_minus_alpha_bar_t) * main_noise_pred)
+        # 2. Initialize Noise (only in unknown slots for this iteration)
+        x = torch.randn(1, DECK_SIZE, EMB_DIM, device=DEVICE)
+        x = current_mask * current_known_emb + (1 - current_mask) * x # Initialize (noise in unknown slots)
 
-        # Add noise for next step (if not t=0)
-        if t > 0:
-            noise_main = torch.randn_like(x)
-            x_next = mean_main + noise_main * beta_t.sqrt()
+        # 3. Run Main Deck Diffusion Sampling Loop for this iteration
+        for t in reversed(range(TIMESTEPS)):
+            t_tensor = torch.full((1,), t, device=DEVICE, dtype=torch.long)
+
+            # Predict noise using the *current mask*
+            main_noise_pred = diffusion_model.predict_main_noise(x, t_tensor, current_mask)
+
+            # Get diffusion parameters
+            beta_t = diffusion_beta[t].to(DEVICE)
+            alpha_t = diffusion_alpha[t].to(DEVICE)
+            alpha_bar_t = diffusion_alpha_bar[t].to(DEVICE)
+            sqrt_alpha_t = alpha_t.sqrt()
+            sqrt_one_minus_alpha_bar_t = (1.0 - alpha_bar_t).sqrt()
+
+            # Calculate mean
+            mean_main = (1.0 / sqrt_alpha_t) * (x - (beta_t / sqrt_one_minus_alpha_bar_t) * main_noise_pred)
+
+            # Add noise for next step (if not t=0)
+            if t > 0:
+                noise_main = torch.randn_like(x)
+                x_next = mean_main + noise_main * beta_t.sqrt()
+            else:
+                x_next = mean_main # Final step uses mean
+
+            # Re-apply *current known mask* and *current known embeddings*
+            x = current_mask * current_known_emb + (1 - current_mask) * x_next
+
+        current_x0_main = x # Resulting main deck tensor for this iteration
+
+        # --- Check 4-Copy Limit and Prepare for Next Iteration
+        if refinement_iter < MAX_REFINEMENT_ITERATIONS:
+            current_app.logger.info(f"Iteration {refinement_iter}: Checking 4-copy limit...")
+            # Classify ALL slots from the current result to get counts
+            iter_all_logits_main = clf_model(current_x0_main[0])
+            iter_all_predicted_indices = torch.argmax(iter_all_logits_main, dim=1).cpu().numpy()
+            # Get names, filtering out potential None results from idx_to_card safely
+            iter_all_predicted_names = []
+            name_idx_map = {}
+            for i, idx in enumerate(iter_all_predicted_indices):
+                name = idx_to_card.get(int(idx))
+                if name is not None:
+                    iter_all_predicted_names.append(name)
+                    name_idx_map[i] = name # Map index to valid name
+                # else: log warning or handle index? For now, just skip.
+
+            iter_card_counts = Counter(iter_all_predicted_names)
+            indices_to_force_regenerate_4_copy = set()
+            indices_to_force_regenerate_format = set()
+
+            for card_name, count in iter_card_counts.items():
+                # Safely get card data
+                card_data_list = cards.get(card_name)
+                if not card_data_list: continue
+                card = card_data_list[0]
+                supertypes = card.get("supertypes", [])
+
+                if count > 4 and "Basic" not in supertypes:
+                    current_app.logger.warning(f"Iteration {refinement_iter}: Card '{card_name}' found {count} times. Marking {count - 4} generated copies for regeneration.")
+                    # Find all absolute indices for this card *that have a valid name mapped*
+                    current_indices = [i for i, name in name_idx_map.items() if name == card_name]
+                    # Identify which of these were *generated* in this or previous refinement steps
+                    generated_indices_for_card = {i for i in current_indices if initial_known_mask[0, i, 0] == 0.0}
+
+                    num_to_replace = count - 4
+                    # Add the required number of generated indices to the force regenerate set
+                    indices_to_force_regenerate_4_copy.update(list(generated_indices_for_card)[:num_to_replace])
+
+            # Format Legality Check (only for generated cards)
+            for abs_idx, card_name in name_idx_map.items(): # Iterate using the map of index -> valid name
+                # Check if this slot was *generated* (not part of initial input)
+                if initial_known_mask[0, abs_idx, 0] == 0.0:
+                    card_data_list = cards.get(card_name)
+                    if card_data_list:
+                        card_data = card_data_list[0]
+                        legalities = card_data.get("legalities", {})
+                        supertypes = card_data.get("supertypes", [])
+                        is_legal = legalities.get(format, "not_legal") == "Legal" or legalities.get(format, "not_legal") == "Restricted"
+                        is_basic = "Basic" in supertypes
+                        
+                        if not is_legal and not is_basic:
+                            current_app.logger.warning(f"Iteration {refinement_iter}: Generated card '{card_name}' (Index: {abs_idx}) is not legal in {format}. Marking for regeneration.")
+                            indices_to_force_regenerate_format.add(abs_idx)
+                    else:
+                         current_app.logger.warning(f"Iteration {refinement_iter}: Could not find data for generated card '{card_name}' (Index: {abs_idx}) to check format legality.")
+
+            # Combine regeneration sets
+            final_absolute_indices_to_regenerate = indices_to_force_regenerate_4_copy.union(indices_to_force_regenerate_format)
+
+            if indices_to_force_regenerate_4_copy:
+                current_app.logger.info(f"Iteration {refinement_iter}: Marking {len(indices_to_force_regenerate_4_copy)} slots for regeneration due to 4-copy rule: {sorted(list(indices_to_force_regenerate_4_copy))}")
+            if indices_to_force_regenerate_format:
+                 current_app.logger.info(f"Iteration {refinement_iter}: Marking {len(indices_to_force_regenerate_format)} additional slots for regeneration due to format ({format}) legality: {sorted(list(indices_to_force_regenerate_format))}")
+            #else:
+            #     current_app.logger.info(f"Iteration {refinement_iter}: No cards exceeded 4-copy limit requiring forced regeneration.")
+
+            # 3. Determine Regeneration Targets
+            #final_absolute_indices_to_regenerate = indices_to_force_regenerate_4_copy
+            final_absolute_indices_to_regenerate_list = sorted(list(final_absolute_indices_to_regenerate))
+
+            # 4. Check if Regeneration is Needed and Prepare for Next Iteration
+            if not final_absolute_indices_to_regenerate_list and num_unknown_this_iter > 0 :
+                current_app.logger.info(f"All {num_unknown_this_iter} generated cards meet 4-copy and format legality rules. Stopping refinement.")
+                break # Stop refinement if all generated cards are good
+            elif num_unknown_this_iter == 0:
+                # This case means no cards were generated, loop should terminate naturally or break earlier
+                pass
+            elif not final_absolute_indices_to_regenerate_list:
+                 # This case should not be reachable due to the break above, but good for safety
+                 current_app.logger.info(f"Iteration {refinement_iter}: No slots marked for regeneration. Stopping refinement.")
+                 break
+            else:
+                 current_app.logger.warning(f"Iteration {refinement_iter}: Preparing to regenerate {len(final_absolute_indices_to_regenerate_list)} slots (due to 4-copy rule). Indices: {final_absolute_indices_to_regenerate_list}")
+
+                 # Log details for slots being reconsidered
+                 for abs_idx in final_absolute_indices_to_regenerate_list:
+                     temp_logits = clf_model(current_x0_main[0, abs_idx].unsqueeze(0))
+                     temp_pred_idx = torch.argmax(temp_logits, dim=1).item()
+                     temp_name = idx_to_card.get(temp_pred_idx, "Unknown Index")
+                     # Determine reason
+                     reason = "Unknown"
+                     if abs_idx in indices_to_force_regenerate_4_copy and abs_idx in indices_to_force_regenerate_format:
+                         reason = "4-Copy & Format"
+                     elif abs_idx in indices_to_force_regenerate_4_copy:
+                         reason = "4-Copy Rule"
+                     elif abs_idx in indices_to_force_regenerate_format:
+                         reason = "Format Legality"
+                     current_app.logger.warning(f"  - Reconsidering Main Deck Slot {abs_idx}: '{temp_name}' - Reason: {reason}")
+
+                 # --- Prepare mask and known embeddings for the *next* iteration ---
+                 next_mask = initial_known_mask.clone()
+                 next_known_emb = initial_known_emb.clone()
+
+                 # Identify generated slots that are *not* being regenerated
+                 all_generated_indices_ever = set(torch.where(initial_known_mask[0, :, 0] == 0)[0].cpu().numpy()) # All indices NOT initially known
+                 valid_copy_generated_indices = list(all_generated_indices_ever - final_absolute_indices_to_regenerate)
+
+                 if valid_copy_generated_indices:
+                     next_mask[0, valid_copy_generated_indices, 0] = 1.0
+                     # Use embeddings from the original diffusion result for knowns
+                     next_known_emb[0, valid_copy_generated_indices] = current_x0_main[0, valid_copy_generated_indices]
+
+                 current_mask = next_mask
+                 current_known_emb = next_known_emb
+                 num_unknown_next = DECK_SIZE - int(current_mask.sum().item())
+                 current_app.logger.info(f"Preparing for Iteration {refinement_iter + 1}. Known cards: {int(current_mask.sum().item())}, Regenerating: {num_unknown_next}")
+
         else:
-            x_next = mean_main # Final step uses mean
+             current_app.logger.info(f"Iteration {refinement_iter}: Refinement loop finished (max iterations reached or stopped early).")
 
-        # Re-apply known mask to main deck
-        x = known_mask * known_emb + (1 - known_mask) * x_next
+    # --- Final Classification and Formatting ---
+    # Handle case where loop was skipped because deck was initially full
+    if current_x0_main is None:
+        if num_unknown_initial == 0:
+            current_x0_main = initial_known_emb.clone()
+            current_app.logger.info("Using initial known embeddings as final result (deck was full).")
+        else:
+            # This indicates an error state
+            current_app.logger.error("Error: current_x0_main is None but deck was not initially full.")
+            return [] # Return empty on error
 
-    x0_final_main = x # Resulting main deck tensor [1, DECK_SIZE, EMB_DIM]
+    final_x0_main = current_x0_main # Use the result from the last iteration's diffusion sampling or initial state
 
-    # 4. Classify Generated Embeddings (Main Deck Unknowns)
+    # Identify slots that were *ultimately* generated (not in the initial mask)
+    final_unknown_mask_flat = (initial_known_mask[0, :, 0] == 0)
+
     generated_main_names = []
-    if num_unknown_main > 0:
-        unknown_main_mask = (known_mask[0, :, 0] == 0)
-        unknown_main_embeddings = x0_final_main[0][unknown_main_mask]
-        if unknown_main_embeddings.shape[0] != num_unknown_main:
-             current_app.logger.error(f"Main deck shape mismatch: Expected {num_unknown_main} unknown embeddings, found {unknown_main_embeddings.shape[0]}")
-             raise RuntimeError("Failed to correctly isolate unknown main deck embeddings.")
+    if final_unknown_mask_flat.sum() > 0:
+        final_unknown_embeddings = final_x0_main[0][final_unknown_mask_flat]
 
-        current_app.logger.info(f"Classifying {num_unknown_main} generated main deck embeddings...")
-        logits_main = clf_model(unknown_main_embeddings)
-        predicted_indices_main = torch.argmax(logits_main, dim=1).cpu().numpy()
-        generated_main_names = [idx_to_card[int(idx)] for idx in predicted_indices_main]
-        current_app.logger.info(f"Generated main deck card names: {Counter(generated_main_names)}")
+        current_app.logger.info(f"Classifying {final_unknown_embeddings.shape[0]} final generated main deck embeddings...")
+        final_logits_main = clf_model(final_unknown_embeddings)
+        final_predicted_indices = torch.argmax(final_logits_main, dim=1).cpu().numpy()
+        # Safely get names
+        temp_generated_names = []
+        for idx in final_predicted_indices:
+            name = idx_to_card.get(int(idx))
+            if name is not None:
+                temp_generated_names.append(name)
+            else:
+                current_app.logger.warning(f"Classifier predicted unknown index {int(idx)} in final main deck. Replacing with 'Error Card Main'.")
+                temp_generated_names.append("Error Card Main")
+        generated_main_names = temp_generated_names
+
+    else:
+        current_app.logger.info("No main deck cards were generated (initial deck was full).")
 
     # 5. Combine and Format Main Deck Results
     completed_deck_names = original_known_names + generated_main_names
@@ -434,7 +610,7 @@ def run_inference(known_cards_list):
          current_app.logger.error(f"Final main deck construction error: Expected {DECK_SIZE} cards, got {len(completed_deck_names)}")
          # Simple padding/truncation fallback
          if len(completed_deck_names) < DECK_SIZE:
-             completed_deck_names.extend(["Error Card"] * (DECK_SIZE - len(completed_deck_names)))
+             completed_deck_names.extend(["Error Card Main"] * (DECK_SIZE - len(completed_deck_names)))
          else:
              completed_deck_names = completed_deck_names[:DECK_SIZE]
 
@@ -447,30 +623,32 @@ def run_inference(known_cards_list):
     # Structure main deck results
     completed_deck_list = []
     for name, count in final_main_counts.items():
+        img_url = image_urls.get(name) if name != "Error Card Main" else None
         completed_deck_list.append({
-            "name": name, "count": count, "image_url": image_urls.get(name)
+            "name": name, "count": count, "image_url": img_url
         })
 
-    current_app.logger.info(f"Main deck inference complete. Final count: {sum(c['count'] for c in completed_deck_list)}.")
+    current_app.logger.info(f"Main deck inference complete after refinement. Final count: {sum(c['count'] for c in completed_deck_list)}.")
 
     return completed_deck_list
 
 # --- Inference Function (Sideboard Completion) ---
 @torch.no_grad()
-def complete_sideboard_inference(main_deck_list, current_sideboard_list):
+def complete_sideboard_inference(main_deck_list, current_sideboard_list, format):
     """
     Completes a sideboard based on a provided main deck and current sideboard cards.
 
     Args:
-        main_deck_list (list): Completed 60-card main deck list: 
+        main_deck_list (list): Completed 60-card main deck list:
                                [{'name': ..., 'count': ..., 'image_url': ...}, ...]
-        current_sideboard_list (list): Current cards in the sideboard: 
+        current_sideboard_list (list): Current cards in the sideboard:
                                      [{'name': ..., 'count': ..., 'image_url': ...}, ...]
+        format (str): The selected game format (e.g., 'modern').
 
     Returns:
         list: Completed sideboard list: [{'name': ..., 'count': ..., 'image_url': ...}]
     """
-    current_app.logger.info(f"Running sideboard completion based on main deck and current sideboard: {current_sideboard_list}")
+    current_app.logger.info(f"Running sideboard completion based on main deck and current sideboard: {current_sideboard_list}, format: {format}")
 
     if diffusion_model is None or clf_model is None or card_embeddings is None or idx_to_card is None:
          raise RuntimeError("Models or data not loaded properly for sideboard inference.")
@@ -478,27 +656,32 @@ def complete_sideboard_inference(main_deck_list, current_sideboard_list):
     if SIDEBOARD_SIZE <= 0:
         current_app.logger.info("SIDEBOARD_SIZE is 0 or less, returning empty sideboard.")
         return []
-        
-    # 1. Reconstruct main deck embedding tensor (context)
+
+    # --- Constants for Refinement ---
+    MAX_REFINEMENT_ITERATIONS = 3
+
+    # 1. Reconstruct main deck embedding tensor (context) and get main deck counts
     main_deck_embeddings = torch.zeros(1, DECK_SIZE, EMB_DIM, device=DEVICE)
     main_current_idx = 0
     main_total_cards = 0
+    main_deck_counts = Counter() # Count cards in the main deck
     for card_info in main_deck_list:
         name = card_info["name"]
         count = card_info["count"]
         main_total_cards += count
+        main_deck_counts[name] += count # Add to main deck counts
         try: vec = torch.tensor(card_embeddings[name], dtype=torch.float32, device=DEVICE)
         except KeyError: raise ValueError(f"Card '{name}' from input main deck not found in embeddings.")
         for _ in range(count):
             if main_current_idx < DECK_SIZE: main_deck_embeddings[0, main_current_idx] = vec; main_current_idx += 1
-            else: raise ValueError("Provided main deck list exceeds DECK_SIZE.")
+            else: raise ValueError("Provided main deck list exceeds DECK_SIZE.") # Should not happen if validation passed
     if main_total_cards != DECK_SIZE or main_current_idx != DECK_SIZE:
         raise ValueError(f"Provided main deck list does not contain exactly {DECK_SIZE} cards.")
-    current_app.logger.info(f"Reconstructed main deck embedding tensor for sideboard context.")
-    
-    # 2. Prepare Known Sideboard Embeddings and Mask
-    sb_known_emb = torch.zeros(1, SIDEBOARD_SIZE, EMB_DIM, device=DEVICE)
-    sb_known_mask = torch.zeros(1, SIDEBOARD_SIZE, 1, device=DEVICE)
+    current_app.logger.info(f"Reconstructed main deck embedding tensor and counts for sideboard context.")
+
+    # 2. Prepare *Initial* Known Sideboard Embeddings and Mask
+    initial_sb_known_emb = torch.zeros(1, SIDEBOARD_SIZE, EMB_DIM, device=DEVICE)
+    initial_sb_known_mask = torch.zeros(1, SIDEBOARD_SIZE, 1, device=DEVICE)
     original_known_sb_names = []
     sb_current_idx = 0
     total_known_sb_count = 0
@@ -514,94 +697,297 @@ def complete_sideboard_inference(main_deck_list, current_sideboard_list):
 
         for _ in range(count):
             if sb_current_idx < SIDEBOARD_SIZE:
-                sb_known_emb[0, sb_current_idx] = vec
-                sb_known_mask[0, sb_current_idx] = 1.0
+                initial_sb_known_emb[0, sb_current_idx] = vec
+                initial_sb_known_mask[0, sb_current_idx] = 1.0
                 original_known_sb_names.append(name)
                 sb_current_idx += 1
             else:
                 current_app.logger.warning(f"Input sideboard exceeds {SIDEBOARD_SIZE} cards. Truncating.")
                 total_known_sb_count = SIDEBOARD_SIZE # Adjust count if truncated
-                break 
+                break
         if sb_current_idx >= SIDEBOARD_SIZE:
             break
-    
-    num_unknown_sb = SIDEBOARD_SIZE - total_known_sb_count
-    if num_unknown_sb < 0:
-        # This case implies input validation failed or truncation occurred.
-        # If truncated, num_unknown_sb should be 0.
+
+    num_unknown_initial = SIDEBOARD_SIZE - total_known_sb_count
+    if num_unknown_initial < 0:
         current_app.logger.warning(f"Known sideboard cards ({total_known_sb_count}) exceeded SIDEBOARD_SIZE ({SIDEBOARD_SIZE}). Assuming full sideboard provided.")
-        num_unknown_sb = 0 # Cannot generate more cards
-        
-    current_app.logger.info(f"Prepared known sideboard embeddings for {total_known_sb_count} cards. Generating {num_unknown_sb} cards.")
+        num_unknown_initial = 0 # Cannot generate more cards
+    # If the initial sideboard is already full, we skip generation/refinement
+    elif num_unknown_initial == 0 and SIDEBOARD_SIZE > 0:
+        current_app.logger.info("Initial sideboard is already full. Skipping generation.")
+        # Directly format and return the initial sideboard
+        initial_sb_counts = Counter(original_known_sb_names)
+        initial_sb_unique_names = list(initial_sb_counts.keys())
+        image_urls = get_card_image_urls(initial_sb_unique_names)
+        completed_sideboard_list = []
+        for name, count in initial_sb_counts.items():
+            img_url = image_urls.get(name)
+            completed_sideboard_list.append({"name": name, "count": count, "image_url": img_url})
+        return completed_sideboard_list
 
-    # 3. Initialize Sideboard Noise (only in unknown slots)
-    sb_x = torch.randn(1, SIDEBOARD_SIZE, EMB_DIM, device=DEVICE)
-    sb_x = sb_known_mask * sb_known_emb + (1 - sb_known_mask) * sb_x 
+    current_app.logger.info(f"Prepared initial known sideboard embeddings for {total_known_sb_count} cards. Initially generating {num_unknown_initial} cards.")
 
-    # 4. Pre-calculate Main Deck Context Encoding 
+    # 3. Pre-calculate Main Deck Context Encoding (Done once)
     sb_context_encoded = diffusion_model.encode_main_deck_context(main_deck_embeddings)
     current_app.logger.info("Calculated sideboard context encoding from main deck.")
 
-    # 5. Run Sideboard Diffusion Sampling Loop
-    for t in reversed(range(TIMESTEPS)):
-        t_tensor = torch.full((1,), t, device=DEVICE, dtype=torch.long)
+    # --- Iterative Refinement (Now only for 4-copy limit) ---
+    current_x0_sb = None # Will hold the result of each diffusion run
+    current_mask = initial_sb_known_mask.clone()
+    current_known_emb = initial_sb_known_emb.clone()
 
-        # Predict noise for sideboard using the dedicated method and pre-computed context
-        # Pass the *current* sb_x, timestep, the known mask, and context
-        sb_noise_pred = diffusion_model.predict_sideboard_noise(sb_x, t_tensor, sb_known_mask, sb_context_encoded)
+    for refinement_iter in range(MAX_REFINEMENT_ITERATIONS + 1): # +1 because iter 0 is the initial run
+        current_app.logger.info(f"--- Starting Sideboard Generation/Refinement Iteration {refinement_iter} ---")
 
-        # Diffusion update steps for sb_x
-        beta_t = diffusion_beta[t].to(DEVICE)
-        alpha_t = diffusion_alpha[t].to(DEVICE)
-        alpha_bar_t = diffusion_alpha_bar[t].to(DEVICE)
-        sqrt_alpha_t = alpha_t.sqrt()
-        sqrt_one_minus_alpha_bar_t = (1.0 - alpha_bar_t).sqrt()
-        mean_sb = (1.0 / sqrt_alpha_t) * (sb_x - (beta_t / sqrt_one_minus_alpha_bar_t) * sb_noise_pred)
-        if t > 0:
-            noise_sb = torch.randn_like(sb_x)
-            sb_x_next = mean_sb + noise_sb * beta_t.sqrt()
+        # Slots unknown at the start of *this iteration*
+        unknown_mask_flat_this_iter = (current_mask[0, :, 0] == 0)
+        num_unknown_this_iter = int(unknown_mask_flat_this_iter.sum().item())
+
+        # If no slots are unknown in this iteration, stop early
+        if num_unknown_this_iter == 0 and refinement_iter > 0: # Check needed only after first iter
+             current_app.logger.info(f"Iteration {refinement_iter}: No unknown slots left to refine. Stopping.")
+             break
+        elif num_unknown_initial == 0 and refinement_iter == 0: # Handled above, but safe check
+             current_app.logger.info("Initial sideboard was full, skipping refinement loop.")
+             break # Should already have returned if SB was initially full
+
+
+        # 4. Initialize Noise (only in unknown slots for this iteration)
+        sb_x = torch.randn(1, SIDEBOARD_SIZE, EMB_DIM, device=DEVICE)
+        # Apply the *current* mask and known embeddings
+        sb_x = current_mask * current_known_emb + (1 - current_mask) * sb_x
+
+        # 5. Run Sideboard Diffusion Sampling Loop for this iteration
+        for t in reversed(range(TIMESTEPS)):
+            t_tensor = torch.full((1,), t, device=DEVICE, dtype=torch.long)
+
+            # Predict noise using the dedicated method, current mask, and pre-computed context
+            sb_noise_pred = diffusion_model.predict_sideboard_noise(sb_x, t_tensor, current_mask, sb_context_encoded)
+
+            # Diffusion update steps
+            beta_t = diffusion_beta[t].to(DEVICE)
+            alpha_t = diffusion_alpha[t].to(DEVICE)
+            alpha_bar_t = diffusion_alpha_bar[t].to(DEVICE)
+            sqrt_alpha_t = alpha_t.sqrt()
+            sqrt_one_minus_alpha_bar_t = (1.0 - alpha_bar_t).sqrt()
+            mean_sb = (1.0 / sqrt_alpha_t) * (sb_x - (beta_t / sqrt_one_minus_alpha_bar_t) * sb_noise_pred)
+            if t > 0:
+                noise_sb = torch.randn_like(sb_x)
+                sb_x_next = mean_sb + noise_sb * beta_t.sqrt()
+            else:
+                sb_x_next = mean_sb
+
+            # IMPORTANT: Apply mask to preserve known cards for *this iteration* during update
+            sb_x = current_mask * current_known_emb + (1 - current_mask) * sb_x_next
+
+        current_x0_sb = sb_x # Resulting sideboard tensor for this iteration
+
+        # --- Check 4-Copy Limit and Prepare for Next Iteration (if not last) ---
+        if refinement_iter < MAX_REFINEMENT_ITERATIONS:
+            current_app.logger.info(f"Iteration {refinement_iter}: Checking 4-copy limit across main deck and current sideboard result...")
+
+            # Classify ALL slots from the current sideboard result
+            iter_all_sb_logits = clf_model(current_x0_sb[0])
+            iter_all_sb_predicted_indices = torch.argmax(iter_all_sb_logits, dim=1).cpu().numpy()
+            # Get names, filtering out potential None results from idx_to_card safely
+            iter_all_sb_predicted_names = []
+            sb_name_idx_map = {} # Map absolute sideboard index to valid name
+            for i, idx in enumerate(iter_all_sb_predicted_indices):
+                name = idx_to_card.get(int(idx))
+                if name is not None:
+                    iter_all_sb_predicted_names.append(name)
+                    sb_name_idx_map[i] = name
+                # else: Skip index if classification failed
+
+            iter_sb_counts = Counter(iter_all_sb_predicted_names)
+
+            # Combine counts from main deck and current sideboard iteration
+            combined_counts = main_deck_counts.copy() # Start with main deck counts
+            combined_counts.update(iter_sb_counts) # Add sideboard counts
+
+            indices_to_force_regenerate_4_copy = set()
+            indices_to_force_regenerate_format = set()
+
+            for card_name, combined_count in combined_counts.items():
+                 # Safely get card data from the preloaded 'cards' dict
+                card_data_list = cards.get(card_name)
+                if not card_data_list: continue # Skip if card data not found
+                card = card_data_list[0]
+                supertypes = card.get("supertypes", [])
+
+                if combined_count > 4 and "Basic" not in supertypes:
+                    # Calculate how many copies are *in the sideboard* for this card
+                    sb_count_for_card = iter_sb_counts.get(card_name, 0)
+                    # Calculate how many *total* copies need to be removed (from SB)
+                    num_to_remove_total = combined_count - 4
+
+                    if sb_count_for_card > 0 and num_to_remove_total > 0:
+                        current_app.logger.warning(f"Iteration {refinement_iter}: Card '{card_name}' found {combined_count} times (Main: {main_deck_counts.get(card_name, 0)}, SB: {sb_count_for_card}). Max 4 allowed (non-basic). Marking {min(sb_count_for_card, num_to_remove_total)} generated SB copies for regeneration.")
+
+                        # Find all absolute *sideboard* indices for this card
+                        current_sb_indices = [i for i, name in sb_name_idx_map.items() if name == card_name]
+
+                        # Identify which of these SB indices were *generated* (not in initial SB mask)
+                        # Use initial_sb_known_mask to know which were originally provided vs generated at any point
+                        generated_sb_indices_for_card = {i for i in current_sb_indices if initial_sb_known_mask[0, i, 0] == 0.0}
+
+                        # We only need to regenerate up to num_to_remove_total copies,
+                        # and we can only regenerate copies that were actually generated (not user-provided)
+                        num_to_regenerate = min(len(generated_sb_indices_for_card), num_to_remove_total)
+
+                        # Add the required number of generated indices to the force regenerate set
+                        indices_to_force_regenerate_4_copy.update(list(generated_sb_indices_for_card)[:num_to_regenerate])
+
+            # Format Legality Check (for generated sideboard cards)
+            for abs_idx, card_name in sb_name_idx_map.items(): # Iterate using the map of index -> valid name
+                # Check if this slot was *generated* (not part of initial sideboard)
+                if initial_sb_known_mask[0, abs_idx, 0] == 0.0:
+                    card_data_list = cards.get(card_name)
+                    if card_data_list:
+                        card_data = card_data_list[0]
+                        legalities = card_data.get("legalities", {})
+                        supertypes = card_data.get("supertypes", [])
+                        is_legal = legalities.get(format, "not_legal") == "Legal" or legalities.get(format, "not_legal") == "Restricted"
+                        is_basic = "Basic" in supertypes
+                        
+                        if not is_legal and not is_basic:
+                            current_app.logger.warning(f"Iteration {refinement_iter}: Generated sideboard card '{card_name}' (Index: {abs_idx}) is not legal in {format}. Marking for regeneration.")
+                            indices_to_force_regenerate_format.add(abs_idx)
+                    else:
+                         current_app.logger.warning(f"Iteration {refinement_iter}: Could not find data for generated sideboard card '{card_name}' (Index: {abs_idx}) to check format legality.")
+
+            # Combine regeneration sets
+            final_absolute_indices_to_regenerate = indices_to_force_regenerate_4_copy.union(indices_to_force_regenerate_format)
+
+            if indices_to_force_regenerate_4_copy:
+                current_app.logger.info(f"Iteration {refinement_iter}: Marking {len(indices_to_force_regenerate_4_copy)} SB slots for regeneration due to 4-copy rule: {sorted(list(indices_to_force_regenerate_4_copy))}")
+            if indices_to_force_regenerate_format:
+                 current_app.logger.info(f"Iteration {refinement_iter}: Marking {len(indices_to_force_regenerate_format)} additional SB slots for regeneration due to format ({format}) legality: {sorted(list(indices_to_force_regenerate_format))}")
+            #else:
+            #     current_app.logger.info(f"Iteration {refinement_iter}: No cards exceeded 4-copy limit requiring forced regeneration in the sideboard.")
+
+
+            # --- Check if Regeneration is Needed and Prepare for Next Iteration ---
+            #absolute_indices_to_regenerate_list = sorted(list(indices_to_force_regenerate_4_copy))
+            absolute_indices_to_regenerate_list = sorted(list(final_absolute_indices_to_regenerate))
+
+            if not absolute_indices_to_regenerate_list and num_unknown_this_iter > 0:
+                current_app.logger.info(f"Iteration {refinement_iter}: All {num_unknown_this_iter} generated SB cards satisfy 4-copy and format legality rules. Stopping refinement.")
+                break # Stop refinement if all generated cards are good
+            elif num_unknown_this_iter == 0:
+                 # This case means no cards were generated, loop should terminate naturally or break earlier
+                 pass
+            elif not absolute_indices_to_regenerate_list:
+                 # This case should not be reachable due to the break above, but good for safety
+                 current_app.logger.info(f"Iteration {refinement_iter}: No SB slots marked for regeneration. Stopping refinement.")
+                 break
+            else:
+                 current_app.logger.warning(f"Iteration {refinement_iter}: Preparing to regenerate {len(absolute_indices_to_regenerate_list)} SB slots due to 4-copy rule. Indices: {absolute_indices_to_regenerate_list}")
+
+                 # Log details for slots being reconsidered
+                 for abs_idx in absolute_indices_to_regenerate_list:
+                     temp_logits = clf_model(current_x0_sb[0, abs_idx].unsqueeze(0))
+                     temp_pred_idx = torch.argmax(temp_logits, dim=1).item()
+                     temp_name = idx_to_card.get(temp_pred_idx, "Unknown Index")
+                     # Determine reason
+                     reason = "Unknown"
+                     if abs_idx in indices_to_force_regenerate_4_copy and abs_idx in indices_to_force_regenerate_format:
+                         reason = "4-Copy & Format"
+                     elif abs_idx in indices_to_force_regenerate_4_copy:
+                         reason = "4-Copy Rule"
+                     elif abs_idx in indices_to_force_regenerate_format:
+                         reason = "Format Legality"
+                     current_app.logger.warning(f"  - Reconsidering SB Slot {abs_idx}: '{temp_name}' - Reason: {reason}")
+
+
+                 # --- Prepare mask and known embeddings for the *next* iteration ---
+                 next_mask = initial_sb_known_mask.clone() # Start with initial knowns
+                 next_known_emb = initial_sb_known_emb.clone()
+
+                 # Identify generated slots (absolute indices) that are *not* being regenerated
+                 all_generated_indices_ever = set(torch.where(initial_sb_known_mask[0, :, 0] == 0)[0].cpu().numpy()) # All indices NOT initially known
+                 valid_copy_generated_indices = list(all_generated_indices_ever - indices_to_force_regenerate_4_copy)
+
+                 # Mark valid-copy generated cards as known for the next iteration
+                 if valid_copy_generated_indices:
+                     next_mask[0, valid_copy_generated_indices, 0] = 1.0
+                     # Use their embeddings from the *current* result
+                     next_known_emb[0, valid_copy_generated_indices] = current_x0_sb[0, valid_copy_generated_indices]
+
+                 # Update current mask and known embeddings for the next loop
+                 current_mask = next_mask
+                 current_known_emb = next_known_emb
+                 num_unknown_next = SIDEBOARD_SIZE - int(current_mask.sum().item())
+                 current_app.logger.info(f"Preparing for Iteration {refinement_iter + 1}. Known SB cards: {int(current_mask.sum().item())}, Regenerating: {num_unknown_next}")
+
         else:
-            sb_x_next = mean_sb
-            
-        # IMPORTANT: Apply mask to preserve known cards during update
-        sb_x = sb_known_mask * sb_known_emb + (1 - sb_known_mask) * sb_x_next
+            current_app.logger.info(f"Iteration {refinement_iter}: Refinement loop finished (max iterations reached or stopped early).")
 
-    x0_final_sb = sb_x # Resulting completed sideboard tensor [1, SIDEBOARD_SIZE, EMB_DIM]
 
-    # 6. Classify *Only Generated* Sideboard Embeddings
+    # --- Final Classification and Formatting ---
+    # Use the final state after all iterations
+    final_x0_sb = current_x0_sb
+
+    # If current_x0_sb is still None (e.g., SB was initially full and loop didn't run)
+    # we need to construct the final list from the original input
+    if final_x0_sb is None:
+        if num_unknown_initial == 0 and SIDEBOARD_SIZE > 0:
+            # This case was handled earlier, return the pre-formatted list
+            # Re-calculate just in case (should match the earlier return)
+            initial_sb_counts = Counter(original_known_sb_names)
+            initial_sb_unique_names = list(initial_sb_counts.keys())
+            image_urls = get_card_image_urls(initial_sb_unique_names)
+            completed_sideboard_list = []
+            for name, count in initial_sb_counts.items():
+                img_url = image_urls.get(name)
+                completed_sideboard_list.append({"name": name, "count": count, "image_url": img_url})
+            current_app.logger.info("Returning initially full sideboard.")
+            return completed_sideboard_list
+        elif SIDEBOARD_SIZE == 0:
+             return [] # Handled at the start
+        else:
+             # This indicates an unexpected state
+             current_app.logger.error("Error: final_x0_sb is None but sideboard was not initially full.")
+             return [] # Return empty on error
+
+
+    # Identify slots that were *ultimately* generated (i.e., not in the initial mask)
+    final_unknown_mask_flat = (initial_sb_known_mask[0, :, 0] == 0)
+
     generated_sb_names = []
-    if num_unknown_sb > 0:
-        unknown_sb_mask_flat = (sb_known_mask[0, :, 0] == 0)
-        unknown_sb_embeddings = x0_final_sb[0][unknown_sb_mask_flat]
-        
-        # Sanity check shape
-        if unknown_sb_embeddings.shape[0] != num_unknown_sb:
-             current_app.logger.error(f"Sideboard shape mismatch: Expected {num_unknown_sb} unknown embeddings, found {unknown_sb_embeddings.shape[0]}")
-             # Attempt to continue, but log error
-             if unknown_sb_embeddings.shape[0] < num_unknown_sb:
-                 num_unknown_sb = unknown_sb_embeddings.shape[0] # Adjust count
-             else: # Too many? Take the expected number
-                 unknown_sb_embeddings = unknown_sb_embeddings[:num_unknown_sb]
-                 
-        if num_unknown_sb > 0: # Check again after potential adjustment
-             current_app.logger.info(f"Classifying {num_unknown_sb} generated sideboard embeddings...")
-             logits_sb = clf_model(unknown_sb_embeddings)
-             predicted_indices_sb = torch.argmax(logits_sb, dim=1).cpu().numpy()
-             generated_sb_names = [idx_to_card[int(idx)] for idx in predicted_indices_sb]
-             current_app.logger.info(f"Generated sideboard card names: {Counter(generated_sb_names)}")
-        else:
-             current_app.logger.info("No unknown sideboard slots to classify after shape check.")
+    if final_unknown_mask_flat.sum() > 0:
+        final_unknown_embeddings = final_x0_sb[0][final_unknown_mask_flat]
 
-    # 7. Combine Original Known SB Names and Generated SB Names
+        current_app.logger.info(f"Classifying {final_unknown_embeddings.shape[0]} final generated sideboard embeddings...")
+        final_logits_sb = clf_model(final_unknown_embeddings)
+        final_predicted_indices = torch.argmax(final_logits_sb, dim=1).cpu().numpy()
+        # Safely get names, handling potential index errors
+        temp_generated_names = []
+        for idx in final_predicted_indices:
+            name = idx_to_card.get(int(idx))
+            if name is not None:
+                temp_generated_names.append(name)
+            else:
+                current_app.logger.warning(f"Classifier predicted unknown index {int(idx)} in final sideboard. Replacing with 'Error Card SB'.")
+                temp_generated_names.append("Error Card SB") # Placeholder for unknown index
+        generated_sb_names = temp_generated_names
+
+    else:
+         current_app.logger.info("No sideboard cards were generated (initial sideboard was full or SIDEBOARD_SIZE=0).")
+
+
+    # 7. Combine Original Known SB Names and Final Generated SB Names
     completed_sb_names = original_known_sb_names + generated_sb_names
+
     # Ensure final count is exactly SIDEBOARD_SIZE (handle potential errors/truncation)
     if len(completed_sb_names) != SIDEBOARD_SIZE:
          current_app.logger.warning(f"Final sideboard construction resulted in {len(completed_sb_names)} cards, expected {SIDEBOARD_SIZE}. Padding/Truncating.")
+         # Simple padding/truncation fallback
          if len(completed_sb_names) < SIDEBOARD_SIZE:
-             # This case is less likely now, maybe pad with a placeholder?
-             completed_sb_names.extend(["Unknown SB Card"] * (SIDEBOARD_SIZE - len(completed_sb_names)))
+             completed_sb_names.extend(["Error Card SB"] * (SIDEBOARD_SIZE - len(completed_sb_names)))
          else:
              completed_sb_names = completed_sb_names[:SIDEBOARD_SIZE]
+
 
     # 8. Format Sideboard Results
     final_sb_counts = Counter(completed_sb_names)
@@ -610,11 +996,13 @@ def complete_sideboard_inference(main_deck_list, current_sideboard_list):
 
     completed_sideboard_list = []
     for name, count in final_sb_counts.items():
+        # Handle potential "Error Card SB" placeholder
+        img_url = image_urls.get(name) if name != "Error Card SB" else None
         completed_sideboard_list.append({
-            "name": name, "count": count, "image_url": image_urls.get(name)
+            "name": name, "count": count, "image_url": img_url
         })
 
-    current_app.logger.info(f"Sideboard completion complete. Final count: {sum(c['count'] for c in completed_sideboard_list)}.")
+    current_app.logger.info(f"Sideboard completion complete after refinement. Final count: {sum(c['count'] for c in completed_sideboard_list)}.")
     return completed_sideboard_list
 
 # --- Scryfall Image Fetching ---
@@ -623,31 +1011,21 @@ image_cache = {}
 
 def get_card_image_urls(card_names):
     """Fetches image URLs from Scryfall for a list of card names.
-       Sends the full name (including // for split/DFC cards) to the API.
        Returns a dictionary mapping original full card names to either a string URL 
        or a dictionary {'front': url1, 'back': url2} for multi-face cards.
     """
     urls = {}
-    # Map from the lowercase version of the name sent to Scryfall back to the original full name(s)
-    # (Using lowercase for robust matching against Scryfall's potential case variations in response)
-    scryfall_name_map_lower = {}
-    names_to_fetch = set() # Use the original names for fetching
+    names_to_fetch = set()
+    name_map = {}
 
     for name in card_names:
         if name not in image_cache:
-            names_to_fetch.add(name) 
-            # Store mapping from lowercase name back to original name(s)
-            lower_name = name.lower()
-            if lower_name not in scryfall_name_map_lower:
-                scryfall_name_map_lower[lower_name] = []
-            # Ensure we don't add duplicate original names for the same query name
-            if name not in scryfall_name_map_lower[lower_name]:
-                scryfall_name_map_lower[lower_name].append(name)
+            names_to_fetch.add(name.split("//")[0])
+            name_map[name.split("//")[0]] = name
         else:
             urls[name] = image_cache[name]
 
     if not names_to_fetch:
-        # All images were already cached
         return urls
 
     current_app.logger.info(f"Fetching {len(names_to_fetch)} card names from Scryfall...")
@@ -661,13 +1039,12 @@ def get_card_image_urls(card_names):
         response.raise_for_status() 
         data = response.json()
 
-        # Map from lowercase Scryfall result name to the image info (URL string or dict)
-        found_map_scryfall_lower = {}
+        found_map = {}
         # Process results for found cards
         if data and 'data' in data:
             for card_data in data['data']:
-                scryfall_result_name = card_data.get('name')
-                image_info = None 
+                scryfall_result_name = name_map.get(card_data.get('name'), card_data.get('name'))
+                image_info = None
 
                 # Check for multi-face cards (includes split, flip, transform, modal_dfc, etc.)
                 if card_data.get('card_faces') and len(card_data['card_faces']) > 1:
@@ -678,25 +1055,19 @@ def get_card_image_urls(card_names):
                     url2 = face2.get('image_uris', {}).get('normal')
                     if url1 or url2:
                         image_info = {'front': url1, 'back': url2}
+                    elif card_data.get('image_uris') and card_data['image_uris'].get('normal'):
+                        image_info = card_data['image_uris']['normal']
                 
                 # If not multi-face (or faces lacked images), check top-level image_uris
                 elif card_data.get('image_uris') and card_data['image_uris'].get('normal'):
                     image_info = card_data['image_uris']['normal']
 
                 if scryfall_result_name:
-                    # Store result keyed by the lowercase name Scryfall returned
-                    found_map_scryfall_lower[scryfall_result_name.lower()] = image_info 
+                    found_map[scryfall_result_name] = image_info 
 
-        # Match fetched data back to the *original* requested names and update cache/results
-        # Iterate through the lowercase map we created earlier
-        for lower_name_key, original_names in scryfall_name_map_lower.items():
-             # Check if this lowercase name was found in Scryfall's results
-             image_data = found_map_scryfall_lower.get(lower_name_key)
-             
-             # Add to cache and results for all original names that mapped to this lowercase name
-             for original_name in original_names:
-                image_cache[original_name] = image_data # Cache result (string, dict, or None)
-                urls[original_name] = image_data
+        for name, image_data in found_map.items():
+            image_cache[name] = image_data
+            urls[name] = image_data
 
         # Log cards not found by Scryfall API call (based on the original names we queried)
         if 'not_found' in data:
@@ -722,10 +1093,6 @@ def get_card_image_urls(card_names):
              if original_name not in urls:
                 image_cache[original_name] = None
                 urls[original_name] = None
-
-    # Introduce delay ONLY if we made a request
-    if names_to_fetch:
-        time.sleep(SCRYFALL_REQUEST_DELAY)
 
     return urls
 
@@ -756,9 +1123,7 @@ def search_cards():
         # --- Determine Query Vector ---
         query_vector = None
 
-        # Check if the input description matches a known card name (case-insensitive check might be useful)
-        # For simplicity, let's do a direct check first, maybe add case-insensitivity later if needed.
-        # Trim whitespace for robustness.
+        # Check if the input description matches a known card name
         trimmed_description = description.strip()
         if trimmed_description in card_embeddings:
             current_app.logger.info(f"Input '{trimmed_description}' matches a known card. Using its embedding.")
@@ -828,6 +1193,12 @@ def complete_deck():
         except ValueError as e: # Catch card name errors from parser
             return jsonify({"error": str(e)}), 400
 
+        # Get and validate format
+        format_input = data.get('format', DEFAULT_FORMAT).lower()
+        if format_input not in ALLOWED_FORMATS:
+            return jsonify({"error": f"Invalid format specified. Allowed formats: {', '.join(ALLOWED_FORMATS)}"}), 400
+        selected_format = format_input
+
         total_known = sum(c['count'] for c in known_cards)
         if total_known > DECK_SIZE:
             return jsonify({"error": f"Input deck has more than {DECK_SIZE} cards ({total_known})."}), 400
@@ -835,7 +1206,7 @@ def complete_deck():
             return jsonify({"error": "Input deck cannot be empty."}), 400
 
         # --- Run Main Deck Inference Only ---
-        completed_deck_list = run_inference(known_cards)
+        completed_deck_list = run_inference(known_cards, selected_format)
 
         if not completed_deck_list: # Check if main deck generation failed
              return jsonify({"error": "Inference failed to generate main deck."}), 500
@@ -882,6 +1253,12 @@ def complete_sideboard_route():
         if not main_deck_list or sum(c.get('count', 0) for c in main_deck_list) != DECK_SIZE:
              return jsonify({"error": f"'completed_deck' must be a list containing exactly {DECK_SIZE} cards."}), 400
              
+        # Get and validate format
+        format_input = data.get('format', DEFAULT_FORMAT).lower()
+        if format_input not in ALLOWED_FORMATS:
+            return jsonify({"error": f"Invalid format specified. Allowed formats: {', '.join(ALLOWED_FORMATS)}"}), 400
+        selected_format = format_input
+             
         # Basic validation of current sideboard list
         if not isinstance(current_sideboard_list, list):
              return jsonify({"error": "'current_sideboard' must be a list."}), 400
@@ -890,7 +1267,7 @@ def complete_sideboard_route():
              return jsonify({"error": f"'current_sideboard' cannot contain more than {SIDEBOARD_SIZE} cards."}), 400
 
         # --- Run Sideboard Completion Inference ---
-        completed_sideboard_list = complete_sideboard_inference(main_deck_list, current_sideboard_list)
+        completed_sideboard_list = complete_sideboard_inference(main_deck_list, current_sideboard_list, selected_format)
 
         # Verify final sideboard count
         final_sb_count = sum(item.get('count', 0) for item in completed_sideboard_list)

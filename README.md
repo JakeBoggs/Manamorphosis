@@ -1,13 +1,29 @@
 ![Manamorphosis Logo](static/logo.png)
 
-A diffusion model to complete Magic: The Gathering (MTG) decklists based on partially provided main decks and sideboards. It also includes a semantic search for cards using text embeddings.
+A diffusion model to complete Magic: The Gathering (MTG) decklists based on partially provided main decks and sideboards. It also includes a fully-featured deck editor and semantic search for cards using text embeddings.
+
+Full technical deep dive in the [announcement blog post](https://boggs.tech/posts/manamorphosis)
 
 ## Features
 
 *   **Main Deck Completion:** Given a partial list of main deck cards, the AI generates the remaining cards to complete a 60-card deck.
 *   **Sideboard Completion:** Given a completed 60-card main deck and an optional partial sideboard, the AI generates the remaining cards to complete a 15-card sideboard.
 *   **Card Search:** Find cards based on a natural language description (uses Doc2Vec similarity).
-*   **Web Interface:** A Flask-based web application provides an easy-to-use interface for deck completion and card search.
+*   **Web Interface:** A Flask-based web application (`app.py`, `templates/index.html`, `static/script.js`) provides an easy-to-use interface for:
+    *   Building main decks and sideboards.
+    *   Searching for cards by name or description.
+    *   Main deck completion and sideboard generation.
+    *   Viewing card images fetched from Scryfall.
+
+    *Main Deck & Sideboard View:*
+    ![Main Interface Screenshot](static/editor.png)
+
+    *Card Search Results Modal:*
+    ![Search Results Screenshot](static/search.png)
+
+## Demo Video
+
+Placeholder
 
 ## Model Details
 
@@ -33,9 +49,9 @@ A diffusion model to complete Magic: The Gathering (MTG) decklists based on part
 *   Requests
 *   Scipy
 *   Numpy
-*   BeautifulSoup4 (for scraping)
-*   aiohttp (for scraping)
-*   tqdm (for progress bars)
+*   BeautifulSoup4
+*   aiohttp
+*   tqdm
 
 You can install the required Python packages using pip:
 

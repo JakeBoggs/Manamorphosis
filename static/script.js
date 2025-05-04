@@ -3,12 +3,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let mainDeckState = new Map(); // Map<cardName, {count: number, image_url: string | object | null}> 
     let sideboardState = new Map(); // Map<cardName, {count: number, image_url: string | object | null}>
     let currentCompletedDeckForSB = null; // Stores the exact list sent *back* from /complete-deck for SB generation
+    const MAX_DECK_SIZE = 60;
+    const MAX_SIDEBOARD_SIZE = 15;
+    const REQUIRED_DECK_SIZE_FOR_SB = 60;
 
     // --- Element References ---
     const deckDisplay = document.getElementById('deck-display');
     const sideboardDisplay = document.getElementById('sideboard-display');
     const completeButton = document.getElementById('complete-button');
     const generateSideboardButton = document.getElementById('generate-sideboard-button');
+    const clearDeckButton = document.getElementById('clear-deck-button');
+    const clearSideboardButton = document.getElementById('clear-sideboard-button');
     const deckStatusMessage = document.getElementById('deck-status-message');
     const sideboardStatusMessage = document.getElementById('sideboard-status-message');
     
@@ -18,9 +23,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchResultsContent = document.getElementById('search-results-content');
     const closeButton = searchModal.querySelector('.close-button');
 
+    // Format Selector
+    const formatSelect = document.getElementById('format-select');
+
+    // Export Elements
+    const exportDeckButton = document.getElementById('export-deck-button');
+    const exportModal = document.getElementById('export-modal');
+    const exportTextarea = document.getElementById('export-textarea');
+    const exportCloseButton = exportModal.querySelector('.export-close-button');
+    const copyExportButton = document.getElementById('copy-export-button');
+
     // --- Initial Display ---
     renderDisplay('deck'); // Render empty deck initially
     renderDisplay('sideboard'); // Render empty sideboard initially
+    updateExportButtonState(); // Initial state for export button
     
     // --- Search Functionality ---
     searchButton.addEventListener('click', async () => {
@@ -134,18 +150,91 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Search on Enter key press
+    searchInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault(); // Prevent default form submission (if any)
+            searchButton.click(); // Trigger the search button click
+        }
+    });
+
     // --- Card Management --- 
+
+    // Helper to calculate total cards in the main deck
+    function getMainDeckTotalCount() {
+        let count = 0;
+        mainDeckState.forEach(data => count += data.count);
+        return count;
+    }
+
+    // Helper to calculate total cards in the sideboard
+    function getSideboardTotalCount() {
+        let count = 0;
+        sideboardState.forEach(data => count += data.count);
+        return count;
+    }
 
     function addCard(cardInfo, target) {
         const state = (target === 'deck') ? mainDeckState : sideboardState;
         const cardName = cardInfo.name;
 
+        // Check deck limit before adding
+        if (target === 'deck') {
+            const currentCount = getMainDeckTotalCount();
+            if (currentCount >= MAX_DECK_SIZE) {
+                deckStatusMessage.textContent = `Cannot add more cards. Deck limit (${MAX_DECK_SIZE}) reached.`;
+                // Flash the message briefly
+                deckStatusMessage.style.color = '#e74c3c'; // Red error color
+                setTimeout(() => {
+                    deckStatusMessage.style.color = ''; // Revert color
+                    renderDisplay('deck'); // Re-render to show correct count message
+                }, 2000);
+                return; // Stop the function
+            }
+        } else if (target === 'sideboard') { // Check sideboard limit
+            const currentCount = getSideboardTotalCount();
+            if (currentCount >= MAX_SIDEBOARD_SIZE) {
+                sideboardStatusMessage.textContent = `Cannot add more cards. Sideboard limit (${MAX_SIDEBOARD_SIZE}) reached.`;
+                sideboardStatusMessage.style.color = '#e74c3c';
+                setTimeout(() => {
+                    sideboardStatusMessage.style.color = '';
+                    renderDisplay('sideboard');
+                }, 2000);
+                return; // Stop the function
+            }
+        }
+
         if (state.has(cardName)) {
+            // If it's the deck, check limit before incrementing existing card
+            if (target === 'deck') {
+                 const currentCount = getMainDeckTotalCount();
+                 if (currentCount >= MAX_DECK_SIZE) {
+                     deckStatusMessage.textContent = `Cannot add more cards. Deck limit (${MAX_DECK_SIZE}) reached.`;
+                     deckStatusMessage.style.color = '#e74c3c';
+                     setTimeout(() => {
+                         deckStatusMessage.style.color = '';
+                         renderDisplay('deck');
+                     }, 2000);
+                    return; // Stop
+                 }
+            } else if (target === 'sideboard') { // Check sideboard limit before incrementing existing
+                const currentCount = getSideboardTotalCount();
+                if (currentCount >= MAX_SIDEBOARD_SIZE) {
+                    sideboardStatusMessage.textContent = `Cannot add more cards. Sideboard limit (${MAX_SIDEBOARD_SIZE}) reached.`;
+                    sideboardStatusMessage.style.color = '#e74c3c';
+                    setTimeout(() => {
+                        sideboardStatusMessage.style.color = '';
+                        renderDisplay('sideboard');
+                    }, 2000);
+                    return; // Stop
+                }
+            }
             state.get(cardName).count++;
         } else {
             state.set(cardName, { count: 1, image_url: cardInfo.image_url });
         }
         renderDisplay(target);
+        updateExportButtonState(); // Update export button state
     }
 
     function removeCard(cardName, target) {
@@ -153,14 +242,40 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.has(cardName)) {
             state.delete(cardName);
             renderDisplay(target);
+            if (target === 'deck') {
+                currentCompletedDeckForSB = null; // Invalidate completed deck if modified
+                generateSideboardButton.disabled = true;
+                sideboardStatusMessage.textContent = 'Main deck modified. Complete again to enable sideboard.';
+            }
         }
+        updateExportButtonState(); // Update export button state
     }
 
     function increaseCount(cardName, target) {
         const state = (target === 'deck') ? mainDeckState : sideboardState;
         if (state.has(cardName)) {
-            state.get(cardName).count++;
+             // Check deck limit before increasing
+            if (target === 'deck') {
+                const currentCount = getMainDeckTotalCount();
+                if (currentCount >= MAX_DECK_SIZE) {
+                    deckStatusMessage.textContent = `Cannot add more cards. Deck limit (${MAX_DECK_SIZE}) reached.`;
+                    deckStatusMessage.style.color = '#e74c3c';
+                     setTimeout(() => {
+                         deckStatusMessage.style.color = '';
+                         renderDisplay('deck');
+                     }, 2000);
+                    return; // Stop
+                }
+                state.get(cardName).count++;
+                currentCompletedDeckForSB = null; // Invalidate completed deck if modified
+                generateSideboardButton.disabled = true;
+                sideboardStatusMessage.textContent = 'Main deck modified. Complete again to enable sideboard.';
+            } else {
+                state.get(cardName).count++;
+            }
+
             renderDisplay(target);
+            updateExportButtonState(); // Update export button state
         }
     }
 
@@ -173,7 +288,13 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 state.delete(cardName); // Remove if count drops to 0
             }
+             if (target === 'deck') {
+                currentCompletedDeckForSB = null; // Invalidate completed deck if modified
+                generateSideboardButton.disabled = true;
+                sideboardStatusMessage.textContent = 'Main deck modified. Complete again to enable sideboard.';
+            }
             renderDisplay(target);
+            updateExportButtonState(); // Update export button state
         }
     }
 
@@ -183,24 +304,46 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderDisplay(target, diffMap = null) {
         const state = (target === 'deck') ? mainDeckState : sideboardState;
         const displayElement = (target === 'deck') ? deckDisplay : sideboardDisplay;
+        const totalDeckCount = getMainDeckTotalCount();
+        const totalSideboardCount = getSideboardTotalCount();
         
         displayElement.innerHTML = ''; // Clear previous content
 
         if (state.size === 0) {
-            displayElement.innerHTML = `<p>No cards in ${target}. Add cards using the search above.</p>`;
-            // Disable buttons if deck is empty
             if (target === 'deck') {
-                completeButton.disabled = true;
-                generateSideboardButton.disabled = true;
+                 displayElement.innerHTML = `<p>No cards in deck. Add cards using the search above.</p>`;
+                 deckStatusMessage.textContent = `Total cards: 0 / ${MAX_DECK_SIZE}`;
+                 completeButton.disabled = true;
+                 generateSideboardButton.disabled = true;
+                 clearDeckButton.disabled = true; // Disable clear if empty
+                 sideboardStatusMessage.textContent = 'Complete the main deck first.';
+            } else {
+                 displayElement.innerHTML = `<p>No cards in sideboard.</p>`;
+                 sideboardStatusMessage.textContent = `Total cards: 0 / ${MAX_SIDEBOARD_SIZE}`;
+                 clearSideboardButton.disabled = true; // Disable clear if empty
             }
             return;
         }
 
-        // Enable complete button if deck has cards
+        // Enable/Disable buttons based on state
         if (target === 'deck') {
-            completeButton.disabled = false;
-            // SB button status depends on whether deck has been completed
-            generateSideboardButton.disabled = !currentCompletedDeckForSB;
+            deckStatusMessage.textContent = `Total cards: ${totalDeckCount} / ${MAX_DECK_SIZE}`;
+            completeButton.disabled = totalDeckCount >= MAX_DECK_SIZE;
+            clearDeckButton.disabled = false;
+            // Sideboard button logic: needs completed deck AND exactly REQUIRED_DECK_SIZE_FOR_SB cards
+            const canGenerateSB = currentCompletedDeckForSB && totalDeckCount === REQUIRED_DECK_SIZE_FOR_SB;
+            generateSideboardButton.disabled = !canGenerateSB;
+            if (currentCompletedDeckForSB) {
+                sideboardStatusMessage.textContent = canGenerateSB 
+                    ? 'Ready to generate sideboard.' 
+                    : `Deck complete, requires ${REQUIRED_DECK_SIZE_FOR_SB} cards (${totalDeckCount} present).`;
+            } else {
+                sideboardStatusMessage.textContent = `Total cards: ${totalSideboardCount} / ${MAX_SIDEBOARD_SIZE}`;
+            }
+        } else { // Sideboard
+            sideboardStatusMessage.textContent = `Total cards: ${totalSideboardCount} / ${MAX_SIDEBOARD_SIZE}`;
+            clearSideboardButton.disabled = false;
+            // Sideboard status message handled above and in completion logic
         }
 
         const sortedCards = Array.from(state.entries()).sort((a, b) => a[0].localeCompare(b[0]));
@@ -275,12 +418,25 @@ document.addEventListener('DOMContentLoaded', () => {
             controls.appendChild(countSpan);
 
             const increaseBtn = document.createElement('button');
+            increaseBtn.title = 'Increase Count';
             increaseBtn.textContent = '+';
             increaseBtn.onclick = () => increaseCount(name, target);
             controls.appendChild(increaseBtn);
 
+            // New Search button
+            const searchAgainBtn = document.createElement('button');
+            searchAgainBtn.title = 'Search for this card';
+            searchAgainBtn.textContent = '🔍';
+            searchAgainBtn.onclick = () => {
+                searchInput.value = name; // Put card name in search bar
+                searchButton.click(); // Trigger search
+                searchModal.style.display = 'block'; // Ensure modal opens if needed (might already be open)
+            };
+            controls.appendChild(searchAgainBtn);
+
             const removeBtn = document.createElement('button');
-            removeBtn.textContent = 'Remove';
+            removeBtn.textContent = '❌';
+            removeBtn.title = 'Remove Card';
             removeBtn.classList.add('remove-button');
             removeBtn.onclick = () => removeCard(name, target);
             controls.appendChild(removeBtn);
@@ -317,8 +473,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Deck Completion Logic ---
     completeButton.addEventListener('click', async () => {
-        if (mainDeckState.size === 0) {
+        const currentDeckCount = getMainDeckTotalCount();
+        if (currentDeckCount === 0) {
             deckStatusMessage.textContent = 'Cannot complete an empty deck.';
+            return;
+        }
+        if (currentDeckCount >= MAX_DECK_SIZE) {
+            deckStatusMessage.textContent = `Deck already has ${currentDeckCount} cards (max ${MAX_DECK_SIZE}). Cannot complete.`;
             return;
         }
         
@@ -337,11 +498,16 @@ document.addEventListener('DOMContentLoaded', () => {
         generateSideboardButton.disabled = true;
         currentCompletedDeckForSB = null; // Reset completed deck state
 
+        const selectedFormat = formatSelect.value; // Get selected format
+
         try {
             const response = await fetch('/complete-deck', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ deck_list: deckListString }),
+                body: JSON.stringify({ 
+                    deck_list: deckListString,
+                    format: selectedFormat // Include format in request
+                }),
             });
 
             if (!response.ok) {
@@ -380,8 +546,13 @@ document.addEventListener('DOMContentLoaded', () => {
             renderDisplay('deck', diffMap); 
             
             deckStatusMessage.textContent = 'Main deck completed.';
-            sideboardStatusMessage.textContent = 'Ready to generate sideboard.';
-            generateSideboardButton.disabled = false; // Enable SB button
+            // Update sideboard status and button based on final deck count
+            const finalDeckCount = getMainDeckTotalCount();
+            const canGenerateSB = finalDeckCount === REQUIRED_DECK_SIZE_FOR_SB;
+            generateSideboardButton.disabled = !canGenerateSB;
+            sideboardStatusMessage.textContent = canGenerateSB 
+                    ? 'Ready to generate sideboard.' 
+                    : `Deck complete, but requires ${REQUIRED_DECK_SIZE_FOR_SB} cards (${finalDeckCount} present).`;
 
         } catch (error) {
             console.error('Error completing deck:', error);
@@ -390,14 +561,28 @@ document.addEventListener('DOMContentLoaded', () => {
             renderDisplay('deck'); // Re-render current state
         } finally {
             completeButton.disabled = (mainDeckState.size === 0); // Re-enable if deck not empty
-            // SB button state managed within try/catch
+            updateExportButtonState(); // Update export button state
+            // SB button state managed within renderDisplay call in try/catch
         }
     });
 
     // --- Sideboard Completion Logic ---
     generateSideboardButton.addEventListener('click', async () => {
-        if (!currentCompletedDeckForSB) {
-            sideboardStatusMessage.textContent = 'Error: Main deck must be completed first.';
+        const currentDeckCount = getMainDeckTotalCount();
+        const currentSideboardCount = getSideboardTotalCount();
+
+        if (currentSideboardCount >= MAX_SIDEBOARD_SIZE) {
+           sideboardStatusMessage.textContent = `Sideboard already has ${currentSideboardCount} cards (max ${MAX_SIDEBOARD_SIZE}). Cannot complete.`;
+           return;
+        }
+
+        if (!currentCompletedDeckForSB || currentDeckCount !== REQUIRED_DECK_SIZE_FOR_SB) {
+            sideboardStatusMessage.textContent = `Error: Main deck must be completed with exactly ${REQUIRED_DECK_SIZE_FOR_SB} cards.`;
+            sideboardStatusMessage.style.color = '#e74c3c'; // Red error color
+            setTimeout(() => {
+                 sideboardStatusMessage.style.color = ''; // Revert color
+                 renderDisplay('deck'); // Re-render to show correct status
+            }, 3000);
             return;
         }
 
@@ -412,13 +597,16 @@ document.addEventListener('DOMContentLoaded', () => {
         sideboardStatusMessage.textContent = 'Completing sideboard...';
         generateSideboardButton.disabled = true;
 
+        const selectedFormat = formatSelect.value; // Get selected format
+
         try {
              const response = await fetch('/complete-sideboard', { // Use renamed endpoint
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                     completed_deck: currentCompletedDeckForSB, 
-                    current_sideboard: currentSideboardList // Send current SB state
+                    current_sideboard: currentSideboardList, // Send current SB state
+                    format: selectedFormat // Include format in request
                 }), 
             });
 
@@ -463,9 +651,98 @@ document.addEventListener('DOMContentLoaded', () => {
             // Re-render current state without diff on error
             renderDisplay('sideboard'); 
         } finally {
-            // Re-enable button if the completed deck context still exists
-            generateSideboardButton.disabled = !currentCompletedDeckForSB;
+            // Re-enable button if the completed deck context still exists AND deck has 60 cards
+            const canGenerateSB = currentCompletedDeckForSB && getMainDeckTotalCount() === REQUIRED_DECK_SIZE_FOR_SB;
+            generateSideboardButton.disabled = !canGenerateSB;
         }
     });
+
+    // --- Export Functionality ---
+    function generateDecklistString() {
+        let decklist = '';
+        const sortedDeck = Array.from(mainDeckState.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+        const sortedSideboard = Array.from(sideboardState.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+        if (sortedDeck.length > 0) {
+            sortedDeck.forEach(([name, data]) => {
+                decklist += `${data.count}x ${name}\n`;
+            });
+        }
+
+        if (sortedSideboard.length > 0) {
+            if (decklist) decklist += '\n';
+            decklist += 'SIDEBOARD\n';
+            sortedSideboard.forEach(([name, data]) => {
+                decklist += `${data.count}x ${name}\n`;
+            });
+        }
+
+        if (!decklist) {
+            decklist = 'Deck and Sideboard are empty.';
+        }
+
+        return decklist.trim();
+    }
+
+    function updateExportButtonState() {
+        exportDeckButton.disabled = mainDeckState.size === 0;
+    }
+
+    exportDeckButton.addEventListener('click', () => {
+        const decklist = generateDecklistString();
+        exportTextarea.value = decklist;
+        exportModal.style.display = 'block';
+        // Automatically select the text for easy copying
+        exportTextarea.select();
+        exportTextarea.setSelectionRange(0, 99999); // For mobile devices
+    });
+
+    copyExportButton.addEventListener('click', () => {
+        exportTextarea.select();
+        exportTextarea.setSelectionRange(0, 99999); // For mobile devices
+        try {
+            navigator.clipboard.writeText(exportTextarea.value);
+            copyExportButton.textContent = 'Copied!';
+            setTimeout(() => { copyExportButton.textContent = '📋 Copy'; }, 1500);
+        } catch (err) {
+            console.error('Failed to copy text: ', err);
+            copyExportButton.textContent = 'Error Copying';
+             setTimeout(() => { copyExportButton.textContent = '📋 Copy'; }, 1500);
+        }
+    });
+
+    // Close export modal functionality
+    exportCloseButton.onclick = () => { exportModal.style.display = 'none'; }
+    window.addEventListener('click', (event) => {
+        if (event.target == exportModal) {
+            exportModal.style.display = 'none';
+        }
+         // Also close search modal if clicking outside
+        if (event.target == searchModal) {
+            searchModal.style.display = 'none';
+        }
+    });
+
+    // --- Clear Button Logic ---
+    clearDeckButton.addEventListener('click', () => {
+        if (confirm('Are you sure you want to clear the entire main deck?')) {
+            mainDeckState.clear();
+            currentCompletedDeckForSB = null;
+            deckStatusMessage.textContent = '';
+            sideboardStatusMessage.textContent = 'Complete the main deck first.';
+            renderDisplay('deck'); // Will show empty message and disable buttons
+            renderDisplay('sideboard'); // Update sideboard state display if needed (though unlikely changed)
+            updateExportButtonState(); // Update export button
+        }
+    });
+
+    clearSideboardButton.addEventListener('click', () => {
+         if (confirm('Are you sure you want to clear the entire sideboard?')) {
+              sideboardState.clear();
+              // Keep sideboard status message related to main deck completion
+              renderDisplay('sideboard'); // Will show empty message and disable clear button
+              updateExportButtonState(); // Update export button
+          }
+      });
 
 });
