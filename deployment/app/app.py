@@ -12,8 +12,7 @@ from scipy.spatial.distance import cosine
 import nltk
 from nltk.corpus import stopwords
 import logging
-import zipfile
-from io import BytesIO
+import subprocess
 
 # --- NLTK Stopwords Download ---
 try:
@@ -53,59 +52,59 @@ DEFAULT_FORMAT = 'modern'
 DECK_SIZE = 60 # Still useful for validation
 SIDEBOARD_SIZE = 15 # Still useful for validation
 
-# --- Helper: Download Data (Simplified for app) ---
+# --- Helper: Download Data (Using gdown) ---
 def download_and_extract_gdrive_folder(folder_id, destination_dir):
-    """Downloads and extracts files from a public Google Drive folder."""
-    print(f"Attempting to download files from Google Drive folder: {folder_id}")
-    URL = "https://docs.google.com/uc?export=download"
-    session = requests.Session()
+    """Downloads and extracts files from a public Google Drive folder using gdown."""
+    # This function now uses gdown, similar to the handler
+    print(f"Attempting to download files from Google Drive folder: {folder_id} to {destination_dir} using gdown...")
+    # Construct the GDrive folder URL
+    folder_url = f'https://drive.google.com/drive/folders/{folder_id}'
+
     try:
-        response = session.get(URL, params={'id': folder_id}, stream=True)
-        response.raise_for_status()
-        content_type = response.headers.get('content-type', '')
-        print(f"Response Content-Type: {content_type}")
+        # Ensure destination exists (gdown might need it)
+        os.makedirs(destination_dir, exist_ok=True)
 
-        if 'zip' in content_type or 'octet-stream' in content_type:
-            print("Received ZIP file, extracting...")
-            with zipfile.ZipFile(BytesIO(response.content)) as z:
-                z.extractall(destination_dir)
-            print(f"Extracted files to {destination_dir}")
-            # Post-Extraction Check and Move (same as inference worker)
-            extracted_items = os.listdir(destination_dir)
-            if len(extracted_items) == 1 and os.path.isdir(os.path.join(destination_dir, extracted_items[0])):
-                gdrive_subfolder = os.path.join(destination_dir, extracted_items[0])
-                print(f"Detected GDrive subfolder: {gdrive_subfolder}. Moving contents up.")
-                for item_name in os.listdir(gdrive_subfolder):
-                    source_item = os.path.join(gdrive_subfolder, item_name)
-                    dest_item = os.path.join(destination_dir, item_name)
-                    os.rename(source_item, dest_item)
-                os.rmdir(gdrive_subfolder)
-            else:
-                print("Files extracted directly or multiple items found.")
+        gdown_command = [
+            'gdown',
+            '--folder',
+            folder_url,
+            '-O', destination_dir, # Output to destination_dir
+            '--quiet' # Reduce console noise
+        ]
+        print(f"Running command: {' '.join(gdown_command)}")
+        result = subprocess.run(gdown_command, capture_output=True, text=True, check=False) # Use check=False to handle errors manually
+
+        if result.returncode != 0:
+           # Log the error from gdown if available
+           error_message = f"gdown failed to download folder {folder_id}. Return code: {result.returncode}."
+           if result.stderr:
+               error_message += f"
+Stderr: {result.stderr.strip()}"
+           if result.stdout: # Sometimes gdown puts errors in stdout
+                error_message += f"
+Stdout: {result.stdout.strip()}"
+           print(error_message) # Use print as logger might not be ready
+           raise Exception(f"gdown failed to download folder {folder_id}. Check permissions and URL.")
         else:
-            print("Warning: Received unexpected content type. Download might have failed.")
-            print("Response Text (first 500 chars):", response.text[:500])
-            raise requests.exceptions.RequestException("Failed to download file from Google Drive (unexpected content type).")
+            print(f"gdown download successful (stdout): {result.stdout}")
+            # Unlike the requests version, gdown --folder should place contents directly
+            # into the destination, so no subfolder moving needed here.
+            print(f"Files should be in {destination_dir}")
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error downloading from Google Drive: {e}")
-        print("Ensure the Google Drive folder is public ('Anyone with the link can view').")
-        raise
-    except zipfile.BadZipFile:
-        print("Error: Downloaded file is not a valid ZIP archive.")
+    except FileNotFoundError:
+        print("Error: 'gdown' command not found. Is gdown installed correctly in the environment?")
         raise
     except Exception as e:
-        print(f"An unexpected error occurred during download/extraction: {e}")
+        print(f"An unexpected error occurred during gdown execution: {e}")
         raise
+
 
 def ensure_search_data_downloaded():
     """Checks if data files needed for search exist, downloads if not."""
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    data_exist = os.path.exists(EMBEDDINGS_PATH) and \
-                 os.path.exists(DOC2VEC_MODEL_PATH) and \
-                 os.path.exists(ATOMIC_CARDS_PATH)
+    data_exist = os.path.exists(EMBEDDINGS_PATH) and os.path.exists(DOC2VEC_MODEL_PATH)
 
     if data_exist:
         print("Search data files already exist. Skipping download.")
@@ -113,13 +112,65 @@ def ensure_search_data_downloaded():
 
     print("Search data files missing. Attempting download from Google Drive...")
     try:
-        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/") # Download to root
-        print("Download and extraction complete.")
+        # Changed destination to '/' for consistency with original intent?
+        # Let's try downloading directly into MODEL_DIR and DATA_DIR as needed.
+        # Gdown --folder downloads the *contents* of the folder.
+        # We need the specific files to land in MODEL_DIR and DATA_DIR.
+        # It might be simpler to download to a temp dir and move, or download to '/'
+        # and rely on the paths within the GDrive folder being correct (/models/..., /data/...)
+
+        # Option 1: Download to root ('/') assuming GDrive has /models and /data folders
+        # download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/")
+        # print("Download attempted to root directory.")
+
+        # Option 2: Download to a temporary directory and move (Safer?)
+        temp_download_dir = "/tmp/gdrive_download"
+        os.makedirs(temp_download_dir, exist_ok=True)
+        print(f"Downloading to temporary directory: {temp_download_dir}")
+        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, temp_download_dir)
+
+        # Now, check if the expected subdirectories exist in temp and move them
+        temp_models_path = os.path.join(temp_download_dir, "models")
+        temp_data_path = os.path.join(temp_download_dir, "data")
+
+        if os.path.isdir(temp_models_path):
+             print(f"Moving contents from {temp_models_path} to {MODEL_DIR}")
+             for item in os.listdir(temp_models_path):
+                 s = os.path.join(temp_models_path, item)
+                 d = os.path.join(MODEL_DIR, item)
+                 if os.path.exists(d): os.remove(d) # Overwrite if exists
+                 os.rename(s, d)
+             os.rmdir(temp_models_path) # Clean up empty dir
+        else:
+             print(f"Warning: Expected 'models' subfolder not found in {temp_download_dir}")
+
+        if os.path.isdir(temp_data_path):
+             print(f"Moving contents from {temp_data_path} to {DATA_DIR}")
+             for item in os.listdir(temp_data_path):
+                 s = os.path.join(temp_data_path, item)
+                 d = os.path.join(DATA_DIR, item)
+                 if os.path.exists(d): os.remove(d) # Overwrite if exists
+                 os.rename(s, d)
+             os.rmdir(temp_data_path) # Clean up empty dir
+        else:
+            print(f"Warning: Expected 'data' subfolder not found in {temp_download_dir}")
+
+        # Clean up the temp download directory if empty
+        try:
+            if not os.listdir(temp_download_dir):
+                os.rmdir(temp_download_dir)
+            else: # If still contains items, log warning
+                 print(f"Warning: Temporary download directory {temp_download_dir} not empty after moving files.")
+        except OSError as e:
+            print(f"Error removing temporary directory {temp_download_dir}: {e}")
+
+
+        print("Download and move process complete.")
         # Verify again
-        if not (os.path.exists(EMBEDDINGS_PATH) and \
-                os.path.exists(DOC2VEC_MODEL_PATH) and \
-                os.path.exists(ATOMIC_CARDS_PATH)):
+        if not (os.path.exists(EMBEDDINGS_PATH) and os.path.exists(DOC2VEC_MODEL_PATH)):
             print("Error: Essential search data files still missing after download attempt.")
+            print(f"Expected Embeddings at: {EMBEDDINGS_PATH} (Exists: {os.path.exists(EMBEDDINGS_PATH)})")
+            print(f"Expected Doc2Vec Model at: {DOC2VEC_MODEL_PATH} (Exists: {os.path.exists(DOC2VEC_MODEL_PATH)})")
             # Add detailed checks like in the inference worker if needed
             raise FileNotFoundError("Essential search data files not found after download.")
 

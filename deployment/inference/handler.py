@@ -6,8 +6,7 @@ import pickle
 import math
 import time
 import logging
-import zipfile
-from io import BytesIO
+import subprocess
 from collections import Counter
 import torch
 import torch.nn as nn
@@ -46,60 +45,31 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- Helper Functions ---
 
 def download_and_extract_gdrive_folder(folder_id, destination_dir):
-    """Downloads and extracts files from a public Google Drive folder."""
-    print(f"Attempting to download files from Google Drive folder: {folder_id}")
-    URL = "https://docs.google.com/uc?export=download"
-    session = requests.Session()
+    """Downloads and extracts files from a public Google Drive folder using gdown."""
+    print(f"Attempting to download files from Google Drive folder: {folder_id} using gdown...")
+    # Construct the GDrive folder URL
+    folder_url = f'https://drive.google.com/drive/folders/{folder_id}'
 
-    # Note: This direct download link approach might be unreliable for large folders or files.
-    # It's generally better to use the Google Drive API or a library like gdown if possible,
-    # but those add dependencies. This is a simplified approach.
     try:
-        response = session.get(URL, params={'id': folder_id}, stream=True)
-        response.raise_for_status() # Raise an exception for bad status codes
+        gdown_command = [
+            'gdown',
+            '--folder',
+            folder_url,
+            '-O', destination_dir, # Output to destination_dir
+            '--quiet' # Reduce console noise
+        ]
+        print(f"Running command: {' '.join(gdown_command)}")
+        result = subprocess.run(gdown_command, capture_output=True, text=True, check=False)
 
-        # Check if the response content type suggests it's downloadable content
-        content_type = response.headers.get('content-type', '')
-        print(f"Response Content-Type: {content_type}")
-
-        if 'zip' in content_type or 'octet-stream' in content_type:
-            print("Received ZIP file, extracting...")
-            with zipfile.ZipFile(BytesIO(response.content)) as z:
-                z.extractall(destination_dir)
-            print(f"Extracted files to {destination_dir}")
-
-            # --- Post-Extraction Check and Move ---
-            # Google Drive often zips content into a subfolder. We need to move items up.
-            extracted_items = os.listdir(destination_dir)
-            # If there's exactly one item and it's a directory, assume it's the container folder.
-            if len(extracted_items) == 1 and os.path.isdir(os.path.join(destination_dir, extracted_items[0])):
-                gdrive_subfolder = os.path.join(destination_dir, extracted_items[0])
-                print(f"Detected GDrive subfolder: {gdrive_subfolder}. Moving contents up.")
-                for item_name in os.listdir(gdrive_subfolder):
-                    source_item = os.path.join(gdrive_subfolder, item_name)
-                    dest_item = os.path.join(destination_dir, item_name)
-                    os.rename(source_item, dest_item)
-                    print(f"Moved {item_name} to {destination_dir}")
-                os.rmdir(gdrive_subfolder) # Remove the now-empty subfolder
-                print(f"Removed empty subfolder: {gdrive_subfolder}")
-            else:
-                print("Files extracted directly into destination or multiple items found.")
-
+        if result.returncode != 0:
+           raise Exception(f"gdown failed to download folder {folder_id}. Check permissions and URL.")
         else:
-            # This might indicate a confirmation page or an error page from Google Drive
-            print("Warning: Received unexpected content type. Download might have failed.")
-            print("Response Text (first 500 chars):", response.text[:500])
-            raise requests.exceptions.RequestException("Failed to download file from Google Drive (unexpected content type).")
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error downloading from Google Drive: {e}")
-        print("Please ensure the Google Drive folder is public ('Anyone with the link can view').")
-        raise
-    except zipfile.BadZipFile:
-        print("Error: Downloaded file is not a valid ZIP archive.")
+            print(f"gdown download successful (stdout): {result.stdout}")
+    except FileNotFoundError:
+        print("Error: 'gdown' command not found. Is gdown installed correctly?")
         raise
     except Exception as e:
-        print(f"An unexpected error occurred during download/extraction: {e}")
+        print(f"An unexpected error occurred during gdown execution or extraction: {e}")
         raise
 
 def ensure_models_downloaded():
@@ -122,7 +92,7 @@ def ensure_models_downloaded():
     # Download to a temporary location or directly if extraction handles paths correctly
     # Let's download to the parent directory '/' and let extraction place them
     try:
-        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/") # Download to root
+        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "./test") # Download to root
         print("Download and extraction complete.")
         # Verify again after download attempt
         if not (os.path.exists(DIFFUSION_MODEL_PATH) and \
