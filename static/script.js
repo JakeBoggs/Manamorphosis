@@ -311,7 +311,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (state.size === 0) {
             if (target === 'deck') {
-                 displayElement.innerHTML = `<p>No cards in deck. Add cards using the search above.</p>`;
+                 displayElement.innerHTML = `<p>No cards in deck. Add cards using the search above. The more cards you add, the better the AI will perform.</p>`;
                  deckStatusMessage.textContent = `Total cards: 0 / ${MAX_DECK_SIZE}`;
                  completeButton.disabled = true;
                  generateSideboardButton.disabled = true;

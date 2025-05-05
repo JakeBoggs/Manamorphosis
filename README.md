@@ -128,7 +128,7 @@ This will start a development server (usually at `http://127.0.0.1:5000` or `htt
 
 ## Deployment
 
-The application is designed to be deployed with the web interface and the inference model running separately for scalability and cost-effectiveness.
+The demo is deployed with the web interface and the inference model running separately to prevent excessive billing from idle GPUs.
 
 *   **Web Application (DigitalOcean App Platform):**
     *   The Flask application (`app.py`) and its associated frontend (`templates/`, `static/`) are deployed as a web service on the DigitalOcean App Platform.

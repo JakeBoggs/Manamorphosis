@@ -366,12 +366,9 @@ def call_runpod_endpoint(payload):
                 error_details = status_result.get('output', {}).get('error', "Unknown error")
                 return {"error": f"RunPod job failed: {error_details}", "details": status_result}, 500
             elif job_status in ["IN_QUEUE", "IN_PROGRESS"]:
-                 current_app.logger.debug(f"RunPod job {job_id} status: {job_status}. Waiting...")
-                 # Optional: Implement exponential backoff for poll_interval
-                 poll_interval = min(poll_interval * 1.5, 15) # Example backoff
+                current_app.logger.debug(f"RunPod job {job_id} status: {job_status}. Waiting...")
             else:
                 current_app.logger.warning(f"RunPod job {job_id} has unexpected status: {job_status}")
-                # Continue polling
 
         return {"error": "RunPod job timed out after {max_wait_seconds} seconds."}, 504 # Gateway Timeout
 
@@ -452,22 +449,18 @@ def complete_sideboard_proxy():
              return jsonify({"error": "'completed_deck' must be a list."}), 400
         main_deck_count = sum(c.get('count', 0) for c in main_deck_list)
         if main_deck_count != DECK_SIZE:
-             # Be slightly more lenient here as the deck came from inference
-             current_app.logger.warning(f"Received completed_deck with {main_deck_count} cards, expected {DECK_SIZE}")
-             # return jsonify({"error": f"'completed_deck' must contain exactly {DECK_SIZE} cards."}), 400
+            return jsonify({"error": f"'completed_deck' must contain exactly {DECK_SIZE} cards."}), 400
 
         if format_input not in ALLOWED_FORMATS:
             return jsonify({"error": f"Invalid format specified. Allowed: {', '.join(ALLOWED_FORMATS)}"}), 400
 
         try:
-            # Validate current sideboard text input
             current_sideboard_list = parse_deck_input(current_sideboard_text) if current_sideboard_text else []
             current_sb_count = sum(c.get('count', 0) for c in current_sideboard_list)
             if current_sb_count > SIDEBOARD_SIZE:
                 return jsonify({"error": f"'current_sideboard' cannot contain more than {SIDEBOARD_SIZE} cards ({current_sb_count} found)."}), 400
         except ValueError as e:
-             return jsonify({"error": f"Input Error (Sideboard): {str(e)}"}), 400
-        # --- End Validation ---
+            return jsonify({"error": f"Input Error (Sideboard): {str(e)}"}), 400
 
         # Prepare payload for RunPod endpoint
         runpod_payload = {
@@ -491,7 +484,4 @@ def complete_sideboard_proxy():
 
 
 if __name__ == '__main__':
-    # Use waitress or gunicorn for production
-    # Example: waitress-serve --host 0.0.0.0 --port 8080 deployment.app.app:app
-    # For local dev:
     app.run(debug=False, host='0.0.0.0', port=8080) # Use a port like 8080 
