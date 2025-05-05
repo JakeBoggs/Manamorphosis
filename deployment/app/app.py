@@ -7,8 +7,8 @@ import time
 import numpy as np
 from flask import Flask, request, jsonify, render_template, current_app
 from collections import Counter
-import gensim # Still needed for search
-from scipy.spatial.distance import cosine # Still needed for search
+import gensim
+from scipy.spatial.distance import cosine
 import nltk
 from nltk.corpus import stopwords
 import logging
@@ -32,7 +32,6 @@ MODEL_DIR = "/models"
 DATA_DIR = "/data"
 EMBEDDINGS_PATH = os.path.join(DATA_DIR, "card_embeddings.pkl") # Needed for search
 DOC2VEC_MODEL_PATH = os.path.join(MODEL_DIR, "embedding_model") # Needed for search
-ATOMIC_CARDS_PATH = os.path.join(DATA_DIR, "AtomicCards.json") # Needed for search name matching, potentially
 
 # Google Drive Folder ID (Needed for downloading data for search)
 GDRIVE_FOLDER_ID = "1ZvVbUGXa8FGzL97lplQGea2Ech7yfR-0"
@@ -142,25 +141,6 @@ def load_search_data():
     # ensure_search_data_downloaded() # Removed: Handled by Dockerfile build
 
     print("Loading search data...")
-
-    # Load AtomicCards data (optional but helpful)
-    try:
-        if os.path.exists(ATOMIC_CARDS_PATH):
-            with open(ATOMIC_CARDS_PATH, 'r', encoding='utf-8') as f:
-                cards_data = json.load(f)
-                if isinstance(cards_data.get('data'), dict):
-                     cards = cards_data['data']
-                     print(f"Loaded {len(cards)} card entries from AtomicCards.json")
-                else:
-                     print("Warning: AtomicCards.json structure unexpected. Card name validation might be limited.")
-                     cards = {}
-        else:
-            print(f"Warning: AtomicCards file not found at {ATOMIC_CARDS_PATH}")
-            cards = {}
-    except Exception as e:
-        print(f"Error loading AtomicCards.json: {e}")
-        cards = {}
-
     # Load Embeddings
     if not os.path.exists(EMBEDDINGS_PATH):
         raise FileNotFoundError(f"Embeddings file not found: {EMBEDDINGS_PATH}")

@@ -4,7 +4,6 @@ import json
 import requests
 import pickle
 import math
-import numpy as np
 import time
 import logging
 import zipfile
@@ -13,24 +12,7 @@ from collections import Counter
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gensim
-from scipy.spatial.distance import cosine
-import nltk
-from nltk.corpus import stopwords
 import runpod
-
-# --- NLTK Stopwords Download ---
-try:
-    stopwords.words('english')
-except LookupError:
-    print("NLTK stopwords not found. Downloading...")
-    try:
-        nltk.download('stopwords')
-        print("NLTK stopwords downloaded.")
-    except Exception as e:
-        print(f"Error downloading NLTK stopwords: {e}. Ensure network connectivity.")
-        # Depending on the model's reliance, you might want to exit or proceed cautiously.
-
 
 # --- Configuration ---
 # These paths will be relative to the container's WORKDIR ('/')
@@ -40,7 +22,7 @@ DIFFUSION_MODEL_PATH = os.path.join(MODEL_DIR, "diffusion_model.pth")
 CLASSIFIER_PATH = os.path.join(MODEL_DIR, "card_classifier.pt")
 EMBEDDINGS_PATH = os.path.join(DATA_DIR, "card_embeddings.pkl")
 DOC2VEC_MODEL_PATH = os.path.join(MODEL_DIR, "embedding_model")
-ATOMIC_CARDS_PATH = os.path.join(DATA_DIR, "AtomicCards.json") # Assuming this is also needed
+ATOMIC_CARDS_PATH = os.path.join(DATA_DIR, "AtomicCards.json")
 
 # Google Drive Folder ID containing the models and data
 GDRIVE_FOLDER_ID = "1ZvVbUGXa8FGzL97lplQGea2Ech7yfR-0"
