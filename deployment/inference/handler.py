@@ -92,7 +92,7 @@ def ensure_models_downloaded():
     # Download to a temporary location or directly if extraction handles paths correctly
     # Let's download to the parent directory '/' and let extraction place them
     try:
-        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "./test") # Download to root
+        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/") # Download to root
         print("Download and extraction complete.")
         # Verify again after download attempt
         if not (os.path.exists(DIFFUSION_MODEL_PATH) and \

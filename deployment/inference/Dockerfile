@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 # Using --no-cache-dir reduces image size
-RUN pip install --no-cache-dir runpod torch nltk requests gdown
+RUN pip install --no-cache-dir runpod torch numpy nltk requests gdown
 # Copy the handler script FIRST so it can be called for download
 COPY deployment/inference/handler.py .
 
