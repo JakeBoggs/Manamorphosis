@@ -39,14 +39,12 @@ GDRIVE_FOLDER_ID = "1ZvVbUGXa8FGzL97lplQGea2Ech7yfR-0"
 SCRYFALL_API_BASE = "https://api.scryfall.com"
 
 # --- RunPod Endpoint Configuration ---
-# !! IMPORTANT: Replace these with your actual RunPod endpoint URL and API Key !!
 RUNPOD_ENDPOINT_URL = os.environ.get("RUNPOD_ENDPOINT_URL", "YOUR_RUNPOD_ENDPOINT_URL_HERE")
 RUNPOD_API_KEY = os.environ.get("RUNPOD_API_KEY", "YOUR_RUNPOD_API_KEY_HERE")
 
 if RUNPOD_ENDPOINT_URL == "YOUR_RUNPOD_ENDPOINT_URL_HERE" or RUNPOD_API_KEY == "YOUR_RUNPOD_API_KEY_HERE":
     print("WARNING: RunPod endpoint URL or API Key not set. Deck/Sideboard completion will fail.")
     print("Please set the RUNPOD_ENDPOINT_URL and RUNPOD_API_KEY environment variables.")
-
 
 # --- Constants ---
 # Constants needed for search/UI

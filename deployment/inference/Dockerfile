@@ -5,13 +5,14 @@ WORKDIR /
 # Install system dependencies required for building some Python packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 # Using --no-cache-dir reduces image size
 RUN pip install --no-cache-dir runpod torch nltk requests
 # Copy the handler script FIRST so it can be called for download
-COPY deployment/inference/rp_handler.py .
+COPY deployment/inference/handler.py .
 
 # --- Model & Data Download --- 
 # Create data directory before downloading into it

@@ -116,62 +116,6 @@ The following scripts need to be run *if you are not using pre-trained models* i
     *   This will create (or update):
         *   `models/diffusion_model.pth`: The trained diffusion model checkpoint.
 
-## Diffusion Model Architecture (`diffusion_model.py:DiffusionModel`)
-
-The model is composed of several interconnected transformer blocks and MLPs. Despite its complexity, the architecture is relatively efficient, containing approximately 56 million parameters, and was successfully trained on a consumer-grade laptop GPU (NVIDIA GeForce RTX 3050 with 4GB VRAM).
-
-1.  **Inputs:**
-    *   `x_t` / `sb_x_t`: Noisy card embeddings for the main deck / sideboard at timestep `t` (Shape: `[Batch, Deck/SB Size, EMB_DIM]`). The embedding dimension (`EMB_DIM`) is 128.
-    *   `t`: Current diffusion timestep (Shape: `[Batch]`).
-    *   `mask` / `sb_mask`: Binary masks indicating known card positions (1.0 for known, 0.0 for unknown) (Shape: `[Batch, Deck/SB Size, 1]`).
-    *   `x0` (Training only): Original main deck embeddings used for sideboard context (Shape: `[Batch, Deck Size, EMB_DIM=128]`).
-    *   `main_deck_context_encoded` (Inference only): Pre-calculated context from the main deck.
-
-2.  **Time Embeddings:**
-    *   `sinusoidal_embedding`: Generates a fixed sinusoidal embedding for the timestep `t` (dimension `EMB_DIM=128`).
-    *   `main_time_mlp` / `sb_time_mlp`: Separate MLPs (Linear -> SiLU -> Linear) process the sinusoidal embedding to create time-specific bias vectors for the main deck and sideboard paths, respectively. Output shape: `[Batch, EMB_DIM=128]`. These are expanded to match the deck/sideboard size.
-
-3.  **Mask Embeddings:**
-    *   `main_mask_mlp` / `sb_mask_mlp`: Separate MLPs (Linear -> SiLU -> Linear) process the binary mask input to create embeddings representing known/unknown positions. Output shape: `[Batch, Deck/SB Size, EMB_DIM=128]`.
-
-4.  **Main Deck Path (Encoder):**
-    *   The input `x_t` is combined with `main_t_emb` and `main_mask_emb` via addition.
-    *   `main_input_proj`: A Linear layer projects the combined embeddings from `EMB_DIM=128` to the model's internal `model_dim=384`.
-    *   `main_transformer_encoder`: A standard `nn.TransformerEncoder` (using `nn.TransformerEncoderLayer`) with `layers=8` processes the projected sequence.
-    *   `main_output_proj`: A Linear layer projects the result back from `model_dim=384` to `EMB_DIM=128`, predicting the noise (`main_noise_pred`).
-
-5.  **Sideboard Context Path (Encoder):**
-    *   Takes the *original* main deck embeddings `x0` (during training) or the *final denoised* main deck embeddings (during inference).
-    *   `sb_context_input_proj`: Linear layer projects from `EMB_DIM=128` to `model_dim=384`.
-    *   `sideboard_context_encoder`: A standard `nn.TransformerEncoder` with **1 layer** processes the projected main deck sequence to create the context (`sb_context_encoded`).
-
-6.  **Sideboard Decoder Path:**
-    *   The input `sb_x_t` is combined with `sb_decoder_t_emb` and `sb_decoder_mask_emb` via addition.
-    *   `sb_input_proj`: Linear layer projects combined sideboard embeddings from `EMB_DIM=128` to `model_dim=384`.
-    *   `sb_transformer_decoder`: A standard `nn.TransformerDecoder` (using `nn.TransformerDecoderLayer`) with **1 layer**. It receives the projected sideboard sequence as `tgt` and the `sb_context_encoded` as `memory`.
-    *   `sb_transformer_output`: The output sequence from the decoder is passed through *another* standard `nn.TransformerEncoder` with `sb_layers=8` layers for further processing.
-    *   `sb_output_proj`: Linear layer projects the result back from `model_dim=384` to `EMB_DIM=128`, predicting the sideboard noise (`sb_noise_pred`).
-
-### Training Process Details
-
-*   **Data Filtration (`diffusion_model.py:DeckDataset`):**
-    *   When loading decks for training, only decks with exactly 60 main deck cards and 15 sideboard cards are included.
-    *   Decks containing card names not found in the pre-computed embeddings (`card_embeddings.pkl`) or the classifier mapping (`card_classifier.pt`) are skipped to ensure data consistency.
-*   **Mask Generation (`diffusion_model.py:DiffusionTrainer`):**
-    *   During each training step, for every deck in the batch, multiple masks (`masks_per_deck` parameter) are generated for both the main deck and the sideboard.
-    *   **Main Deck Masking:**
-        *   The total number of possible known cards `k` (from 1 to 59) is partitioned across the `masks_per_deck`. Each generated mask samples a `k` value from one of these partitions. This ensures the model sees a diverse range of `k` values.
-        *   For a chosen `k`, the specific card positions to keep known (marked as 1.0 in the mask) are selected based on card popularity and a probabilistic approach:
-            *   Unique cards available to be masked are identified.
-            *   These unique cards are sampled *without replacement* based on weights derived from their pre-calculated popularity (less popular cards are slightly favored).
-            *   The algorithm iterates through the weighted, shuffled unique cards.
-            *   For each card, there's an 85% chance it attempts to mask *all* available copies of that card (up to the remaining `k` needed) and a 15% chance it attempts to mask a *random number* of available copies (between 1 and the number available, up to the remaining `k` needed).
-            *   This process continues until exactly `k` positions are marked as known.
-    *   **Sideboard Masking:**
-        *   A random target `k` value is chosen between 1 and 14 (`SIDEBOARD_SIZE - 1`).
-        *   There's a 50% chance this target `k` is set to 0.
-        *   The same card selection logic (using popularity weighting and the 85%/15% split) as the main deck is then used to select `k` sideboard card positions to keep known. If `k` is 0, no sideboard cards are marked as known.
-
 ## Running the Application
 
 Once the data preparation steps (at least embeddings and classifier training) are complete and the diffusion model is trained (or you have a pre-trained one), you can run the Flask web application:
@@ -182,13 +126,20 @@ python app.py
 
 This will start a development server (usually at `http://127.0.0.1:5000` or `http://localhost:5000`). Open this URL in your web browser.
 
-For production, use a proper WSGI server like Gunicorn or Waitress:
+## Deployment
 
-```bash
-# Example using Waitress
-pip install waitress
-waitress-serve --host 0.0.0.0 --port 5000 app:app
-```
+The application is designed to be deployed with the web interface and the inference model running separately for scalability and cost-effectiveness.
+
+*   **Web Application (DigitalOcean App Platform):**
+    *   The Flask application (`app.py`) and its associated frontend (`templates/`, `static/`) are deployed as a web service on the DigitalOcean App Platform.
+    *   It handles user interactions, deck building, card search, and makes requests to the inference server.
+    *   Configuration details can be found in the `deployment/app/` directory.
+
+*   **Inference Server (Runpod Serverless):**
+    *   The computationally intensive diffusion model inference (main deck and sideboard completion) runs on Runpod Serverless.
+    *   This provides a cost-effective GPU-powered endpoint that scales on demand.
+    *   The necessary handler (`handler.py`) and Docker setup for Runpod can be found in the `deployment/inference/` directory.
+    *   The web application needs to be configured with the URL of the deployed Runpod endpoint.
 
 ## Utilities
 

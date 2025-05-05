@@ -25,11 +25,10 @@ except LookupError:
     print("NLTK stopwords downloaded.")
 
 # --- Configuration ---
-# Adjust these paths if your files are located elsewhere
 MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
-DIFFUSION_MODEL_PATH = os.path.join(MODEL_DIR, "models/diffusion_model.pth") # Adjusted path assuming 'models' subdir
-CLASSIFIER_PATH = os.path.join(MODEL_DIR, "models/card_classifier.pt") # Adjusted path
-EMBEDDINGS_PATH = os.path.join(MODEL_DIR, "data/card_embeddings.pkl") # Adjusted path
+DIFFUSION_MODEL_PATH = os.path.join(MODEL_DIR, "models/diffusion_model.pth") 
+CLASSIFIER_PATH = os.path.join(MODEL_DIR, "models/card_classifier.pt")
+EMBEDDINGS_PATH = os.path.join(MODEL_DIR, "data/card_embeddings.pkl")
 DOC2VEC_MODEL_PATH = os.path.join(MODEL_DIR, "models/embedding_model")
 
 SCRYFALL_API_BASE = "https://api.scryfall.com"
