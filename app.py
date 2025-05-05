@@ -2,7 +2,6 @@ import os
 import re
 import json
 import requests
-import time
 import pickle
 import math
 import numpy as np
