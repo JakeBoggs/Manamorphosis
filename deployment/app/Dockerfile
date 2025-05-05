@@ -3,7 +3,7 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Use --no-cache-dir to reduce image size
-RUN pip install --no-cache-dir Flask gensim nltk requests numpy scipy pickle5 waitress gdown
+RUN pip install --no-cache-dir Flask gensim nltk requests numpy scipy waitress gdown
 
 # Copy application code (source is '.', the build context) into WORKDIR (/app)
 COPY . .
