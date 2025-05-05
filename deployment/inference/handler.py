@@ -734,9 +734,8 @@ def complete_sideboard_inference(main_deck_list, current_sideboard_list, format)
     """Completes a sideboard based on a provided main deck and current sideboard cards."""
     logging.info(f"Running sideboard completion for {len(current_sideboard_list)} initial types, format: {format}")
 
-    if not all([diffusion_model, clf_model, card_embeddings, idx_to_card, cards,
-                diffusion_beta, diffusion_alpha, diffusion_alpha_bar]):
-         raise RuntimeError("Models or data not loaded properly for sideboard inference.")
+    if diffusion_model is None or clf_model is None or card_embeddings is None or idx_to_card is None:
+        raise RuntimeError("Models or data not loaded properly for sideboard inference.")
 
     if SIDEBOARD_SIZE <= 0:
         logging.info("SIDEBOARD_SIZE is 0 or less, returning empty sideboard.")
