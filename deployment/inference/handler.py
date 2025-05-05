@@ -490,13 +490,10 @@ def get_card_image_urls(card_names):
 @torch.no_grad()
 def run_inference(known_cards_list, format):
     """Runs diffusion model inference to complete the main deck."""
-    # This function is largely the same as in app.py, removing current_app.logger
-    # and adding checks for model/data loading.
     logging.info(f"Running main deck inference for known_cards: {len(known_cards_list)} types, format: {format}")
 
-    if not all([diffusion_model, clf_model, card_embeddings, idx_to_card, cards,
-                diffusion_beta, diffusion_alpha, diffusion_alpha_bar]):
-         raise RuntimeError("Models or data not loaded properly for inference.")
+    if diffusion_model is None or clf_model is None or card_embeddings is None or idx_to_card is None:
+        raise RuntimeError("Models or data not loaded properly for inference.")
 
     MAX_REFINEMENT_ITERATIONS = 3
 
@@ -1136,8 +1133,3 @@ if __name__ == '__main__':
         runpod.serverless.start({"handler": handler})
     except Exception as e:
         print(f"FATAL: Failed to initialize worker: {e}")
-        # Optionally exit or prevent RunPod from starting the handler loop
-        # Depending on RunPod's behavior, this might cause the pod to fail and restart
-        # which might be desired if initialization fails critically.
-        # import sys
-        # sys.exit(1) 

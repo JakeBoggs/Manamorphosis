@@ -1290,7 +1290,4 @@ def complete_sideboard_route():
         return jsonify({"error": "An internal server error occurred."}), 500
 
 if __name__ == '__main__':
-    # Use waitress or gunicorn in production instead of Flask's dev server
-    # Example: waitress-serve --host 0.0.0.0 --port 5000 app:app
-    # For development:
-    app.run(debug=True, host='0.0.0.0') # Turn debug True for easier development/reloading
+    app.run(debug=True, host='0.0.0.0')

@@ -5,7 +5,7 @@ WORKDIR /
 # Use --no-cache-dir to reduce image size
 RUN pip install --no-cache-dir Flask gensim nltk requests numpy scipy waitress gdown
 
-COPY deployment/app/app.py .
+COPY app.py .
 COPY ../../templates /templates
 COPY ../../static /static
 

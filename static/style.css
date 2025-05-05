@@ -413,6 +413,7 @@ input[type="text"] {
     /* Keep if any specific styling needed, otherwise can remove */
     display: flex; /* Keep flex for internal alignment if needed */
     align-items: center;
+    gap: 15px; /* Add gap between social links and format selector */
 }
 
 .format-selector label {
@@ -479,4 +480,98 @@ input[type="text"] {
 .search-result-item {
     padding-top: 15px;
     padding-bottom: 15px;
-} 
+}
+
+/* Social Links */
+.social-links {
+    display: flex;
+    align-items: center;
+    gap: 10px; /* Space between icons */
+}
+
+.social-icon {
+    height: 24px; /* Slightly larger icons */
+    width: auto;
+    vertical-align: middle; /* Align icons nicely with text if any */
+}
+
+/* --- Responsive Design --- */
+@media (max-width: 768px) {
+    body {
+        padding: 0 10px 10px 10px; /* Reduce body padding */
+    }
+
+    .title-container {
+        flex-direction: column; /* Stack elements vertically */
+        align-items: center; /* Center items */
+        gap: 15px; /* Add vertical gap */
+        padding: 0 10px; /* Adjust padding */
+        text-align: center; /* Center h1 text */
+    }
+
+    .title-container h1 {
+        margin-bottom: 10px; /* Reduce margin below title */
+    }
+
+    .controls-container {
+        justify-content: center; /* Center format selector */
+        width: 100%; /* Allow it to take full width if needed */
+    }
+
+    .search-container {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+
+    .search-input-group {
+        flex-direction: column; /* Stack search input and button */
+        align-items: stretch; /* Make button full width */
+        gap: 8px;
+    }
+
+    .search-input-group input[type="text"] {
+        width: 100%; /* Ensure input takes full width */
+    }
+
+    .deck-container {
+        flex-direction: column; /* Stack deck and sideboard */
+        gap: 20px;
+    }
+
+    /* Ensure both deck sections take full width when stacked */
+    .deck-container > .display-section {
+        width: 100%;
+        min-width: unset; /* Reset min-width if set elsewhere */
+    }
+
+    .sideboard-section {
+        flex-basis: auto; /* Reset flex-basis */
+        width: 100%; /* Allow sideboard to take full width */
+        min-width: unset; /* Reset min-width */
+    }
+
+    #sideboard-display {
+        /* Grid already handles single column well, might not need changes */
+        /* Or ensure it adapts */
+         grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); /* Allow more flexible columns if needed */
+    }
+
+    .modal-content {
+        width: 90%; /* Make modal wider on smaller screens */
+        margin: 30px auto; /* Adjust margin */
+    }
+
+     #search-results-content {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); /* Smaller cards in modal on mobile */
+    }
+
+     #export-modal .modal-content {
+        width: 90%;
+    }
+
+}
+
+/* --- Utilities / Overrides (Keep at the end) --- */
+/* Example: Add a class to hide something specifically on mobile */
+/* .hide-on-mobile { display: none; } */
+/* @media (min-width: 769px) { .hide-on-desktop { display: none; } } */ 
