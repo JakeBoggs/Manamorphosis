@@ -15,12 +15,10 @@ RUN pip install --no-cache-dir runpod torch numpy nltk requests gdown
 COPY deployment/inference/handler.py .
 
 # --- Model & Data Download --- 
-# Create data directory before downloading into it
-RUN mkdir -p /data
-# Download AtomicCards.json directly
-RUN curl -L -o /data/AtomicCards.json https://mtgjson.com/api/v5/AtomicCards.json
 # Download other models/data using the script function
 RUN python -c "import handler; handler.ensure_models_downloaded()"
+# Download AtomicCards.json directly
+RUN curl -L -o /pretrained/data/AtomicCards.json https://mtgjson.com/api/v5/AtomicCards.json
 
 # Run handler.py when the container launches
 # The -u flag ensures that print statements are sent straight to stdout without being buffered

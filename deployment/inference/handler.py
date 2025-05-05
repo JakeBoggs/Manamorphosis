@@ -14,13 +14,11 @@ import torch.nn.functional as F
 import runpod
 
 # --- Configuration ---
-# These paths will be relative to the container's WORKDIR ('/')
 MODEL_DIR = "/pretrained/models"
 DATA_DIR = "/pretrained/data"
 DIFFUSION_MODEL_PATH = os.path.join(MODEL_DIR, "diffusion_model.pth")
 CLASSIFIER_PATH = os.path.join(MODEL_DIR, "card_classifier.pt")
 EMBEDDINGS_PATH = os.path.join(DATA_DIR, "card_embeddings.pkl")
-DOC2VEC_MODEL_PATH = os.path.join(MODEL_DIR, "embedding_model")
 ATOMIC_CARDS_PATH = os.path.join(DATA_DIR, "AtomicCards.json")
 
 # Google Drive Folder ID containing the models and data
@@ -79,8 +77,7 @@ def ensure_models_downloaded():
 
     # Check if essential files exist
     models_exist = os.path.exists(DIFFUSION_MODEL_PATH) and \
-                   os.path.exists(CLASSIFIER_PATH) and \
-                   os.path.exists(DOC2VEC_MODEL_PATH)
+                   os.path.exists(CLASSIFIER_PATH)
     data_exist = os.path.exists(EMBEDDINGS_PATH) and \
                  os.path.exists(ATOMIC_CARDS_PATH)
 
@@ -92,18 +89,16 @@ def ensure_models_downloaded():
     # Download to a temporary location or directly if extraction handles paths correctly
     # Let's download to the parent directory '/' and let extraction place them
     try:
-        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/pretrained") # Download to root
+        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/pretrained")
         print("Download and extraction complete.")
         # Verify again after download attempt
         if not (os.path.exists(DIFFUSION_MODEL_PATH) and \
                 os.path.exists(CLASSIFIER_PATH) and \
-                os.path.exists(DOC2VEC_MODEL_PATH) and \
                 os.path.exists(EMBEDDINGS_PATH) and \
                 os.path.exists(ATOMIC_CARDS_PATH)):
             print("Error: Essential files still missing after download attempt.")
             print(f"Expected Diffusion Model at: {DIFFUSION_MODEL_PATH} (Exists: {os.path.exists(DIFFUSION_MODEL_PATH)})")
             print(f"Expected Classifier at: {CLASSIFIER_PATH} (Exists: {os.path.exists(CLASSIFIER_PATH)})")
-            print(f"Expected Doc2Vec Model at: {DOC2VEC_MODEL_PATH} (Exists: {os.path.exists(DOC2VEC_MODEL_PATH)})")
             print(f"Expected Embeddings at: {EMBEDDINGS_PATH} (Exists: {os.path.exists(EMBEDDINGS_PATH)})")
             print(f"Expected Atomic Cards at: {ATOMIC_CARDS_PATH} (Exists: {os.path.exists(ATOMIC_CARDS_PATH)})")
 
@@ -287,7 +282,6 @@ idx_to_card = None
 diffusion_beta = None
 diffusion_alpha = None
 diffusion_alpha_bar = None
-doc2vec_model = None # Keep this for potential future use, but not loaded here
 cards = None # Loaded from AtomicCards.json
 
 # --- Model/Data Loading ---
@@ -295,8 +289,6 @@ def load_models_and_data():
     global diffusion_model, clf_model, card_embeddings, idx_to_card
     global diffusion_beta, diffusion_alpha, diffusion_alpha_bar
     global cards
-
-    # ensure_models_downloaded() # Removed: Handled by Dockerfile build
 
     logging.info("Loading models and data...")
 
@@ -323,17 +315,6 @@ def load_models_and_data():
     with open(EMBEDDINGS_PATH, "rb") as f:
         card_embeddings = pickle.load(f)
     logging.info(f"Loaded {len(card_embeddings)} card embeddings.")
-
-    # Doc2Vec model is NOT needed for inference, skip loading it.
-    # if not os.path.exists(DOC2VEC_MODEL_PATH):
-    #     raise FileNotFoundError(f"Doc2Vec model file not found: {DOC2VEC_MODEL_PATH}")
-    # try:
-    #     logging.info(f"Loading Doc2Vec model from {DOC2VEC_MODEL_PATH}...")
-    #     doc2vec_model = gensim.models.Doc2Vec.load(DOC2VEC_MODEL_PATH)
-    #     logging.info("Doc2Vec model loaded.")
-    # except Exception as e:
-    #     logging.error(f"Error loading Doc2Vec model: {e}")
-    #     raise
 
     if not os.path.exists(DIFFUSION_MODEL_PATH):
         raise FileNotFoundError(f"Diffusion model checkpoint not found: {DIFFUSION_MODEL_PATH}")

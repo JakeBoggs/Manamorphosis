@@ -27,8 +27,8 @@ except LookupError:
 
 # --- Configuration ---
 # Paths relative to the container's WORKDIR ('/')
-MODEL_DIR = "/pretrained/models"
-DATA_DIR = "/pretrained/data"
+MODEL_DIR = "/models"
+DATA_DIR = "/data"
 EMBEDDINGS_PATH = os.path.join(DATA_DIR, "card_embeddings.pkl") # Needed for search
 DOC2VEC_MODEL_PATH = os.path.join(MODEL_DIR, "embedding_model") # Needed for search
 
@@ -78,18 +78,13 @@ def download_and_extract_gdrive_folder(folder_id, destination_dir):
            # Log the error from gdown if available
            error_message = f"gdown failed to download folder {folder_id}. Return code: {result.returncode}."
            if result.stderr:
-               error_message += f"
-Stderr: {result.stderr.strip()}"
+               error_message += f"Stderr: {result.stderr.strip()}"
            if result.stdout: # Sometimes gdown puts errors in stdout
-                error_message += f"
-Stdout: {result.stdout.strip()}"
-           print(error_message) # Use print as logger might not be ready
+                error_message += f"Stdout: {result.stdout.strip()}"
+           print(error_message)
            raise Exception(f"gdown failed to download folder {folder_id}. Check permissions and URL.")
         else:
             print(f"gdown download successful (stdout): {result.stdout}")
-            # Unlike the requests version, gdown --folder should place contents directly
-            # into the destination, so no subfolder moving needed here.
-            print(f"Files should be in {destination_dir}")
 
     except FileNotFoundError:
         print("Error: 'gdown' command not found. Is gdown installed correctly in the environment?")
@@ -112,18 +107,6 @@ def ensure_search_data_downloaded():
 
     print("Search data files missing. Attempting download from Google Drive...")
     try:
-        # Changed destination to '/' for consistency with original intent?
-        # Let's try downloading directly into MODEL_DIR and DATA_DIR as needed.
-        # Gdown --folder downloads the *contents* of the folder.
-        # We need the specific files to land in MODEL_DIR and DATA_DIR.
-        # It might be simpler to download to a temp dir and move, or download to '/'
-        # and rely on the paths within the GDrive folder being correct (/models/..., /data/...)
-
-        # Option 1: Download to root ('/') assuming GDrive has /models and /data folders
-        # download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/")
-        # print("Download attempted to root directory.")
-
-        # Option 2: Download to a temporary directory and move (Safer?)
         temp_download_dir = "/tmp/gdrive_download"
         os.makedirs(temp_download_dir, exist_ok=True)
         print(f"Downloading to temporary directory: {temp_download_dir}")
