@@ -12,7 +12,6 @@ from scipy.spatial.distance import cosine
 import nltk
 from nltk.corpus import stopwords
 import logging
-import subprocess
 
 # --- NLTK Stopwords Download ---
 try:
@@ -52,125 +51,16 @@ DEFAULT_FORMAT = 'modern'
 DECK_SIZE = 60 # Still useful for validation
 SIDEBOARD_SIZE = 15 # Still useful for validation
 
-# --- Helper: Download Data (Using gdown) ---
-def download_and_extract_gdrive_folder(folder_id, destination_dir):
-    """Downloads and extracts files from a public Google Drive folder using gdown."""
-    # This function now uses gdown, similar to the handler
-    print(f"Attempting to download files from Google Drive folder: {folder_id} to {destination_dir} using gdown...")
-    # Construct the GDrive folder URL
-    folder_url = f'https://drive.google.com/drive/folders/{folder_id}'
-
-    try:
-        # Ensure destination exists (gdown might need it)
-        os.makedirs(destination_dir, exist_ok=True)
-
-        gdown_command = [
-            'gdown',
-            '--folder',
-            folder_url,
-            '-O', destination_dir, # Output to destination_dir
-            '--quiet' # Reduce console noise
-        ]
-        print(f"Running command: {' '.join(gdown_command)}")
-        result = subprocess.run(gdown_command, capture_output=True, text=True, check=False) # Use check=False to handle errors manually
-
-        if result.returncode != 0:
-           # Log the error from gdown if available
-           error_message = f"gdown failed to download folder {folder_id}. Return code: {result.returncode}."
-           if result.stderr:
-               error_message += f"Stderr: {result.stderr.strip()}"
-           if result.stdout: # Sometimes gdown puts errors in stdout
-                error_message += f"Stdout: {result.stdout.strip()}"
-           print(error_message)
-           raise Exception(f"gdown failed to download folder {folder_id}. Check permissions and URL.")
-        else:
-            print(f"gdown download successful (stdout): {result.stdout}")
-
-    except FileNotFoundError:
-        print("Error: 'gdown' command not found. Is gdown installed correctly in the environment?")
-        raise
-    except Exception as e:
-        print(f"An unexpected error occurred during gdown execution: {e}")
-        raise
-
-
-def ensure_search_data_downloaded():
-    """Checks if data files needed for search exist, downloads if not."""
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    data_exist = os.path.exists(EMBEDDINGS_PATH) and os.path.exists(DOC2VEC_MODEL_PATH)
-
-    if data_exist:
-        print("Search data files already exist. Skipping download.")
-        return
-
-    print("Search data files missing. Attempting download from Google Drive...")
-    try:
-        temp_download_dir = "/tmp/gdrive_download"
-        os.makedirs(temp_download_dir, exist_ok=True)
-        print(f"Downloading to temporary directory: {temp_download_dir}")
-        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, temp_download_dir)
-
-        # Now, check if the expected subdirectories exist in temp and move them
-        temp_models_path = os.path.join(temp_download_dir, "models")
-        temp_data_path = os.path.join(temp_download_dir, "data")
-
-        if os.path.isdir(temp_models_path):
-             print(f"Moving contents from {temp_models_path} to {MODEL_DIR}")
-             for item in os.listdir(temp_models_path):
-                 s = os.path.join(temp_models_path, item)
-                 d = os.path.join(MODEL_DIR, item)
-                 if os.path.exists(d): os.remove(d) # Overwrite if exists
-                 os.rename(s, d)
-             os.rmdir(temp_models_path) # Clean up empty dir
-        else:
-             print(f"Warning: Expected 'models' subfolder not found in {temp_download_dir}")
-
-        if os.path.isdir(temp_data_path):
-             print(f"Moving contents from {temp_data_path} to {DATA_DIR}")
-             for item in os.listdir(temp_data_path):
-                 s = os.path.join(temp_data_path, item)
-                 d = os.path.join(DATA_DIR, item)
-                 if os.path.exists(d): os.remove(d) # Overwrite if exists
-                 os.rename(s, d)
-             os.rmdir(temp_data_path) # Clean up empty dir
-        else:
-            print(f"Warning: Expected 'data' subfolder not found in {temp_download_dir}")
-
-        # Clean up the temp download directory if empty
-        try:
-            if not os.listdir(temp_download_dir):
-                os.rmdir(temp_download_dir)
-            else: # If still contains items, log warning
-                 print(f"Warning: Temporary download directory {temp_download_dir} not empty after moving files.")
-        except OSError as e:
-            print(f"Error removing temporary directory {temp_download_dir}: {e}")
-
-
-        print("Download and move process complete.")
-        # Verify again
-        if not (os.path.exists(EMBEDDINGS_PATH) and os.path.exists(DOC2VEC_MODEL_PATH)):
-            print("Error: Essential search data files still missing after download attempt.")
-            print(f"Expected Embeddings at: {EMBEDDINGS_PATH} (Exists: {os.path.exists(EMBEDDINGS_PATH)})")
-            print(f"Expected Doc2Vec Model at: {DOC2VEC_MODEL_PATH} (Exists: {os.path.exists(DOC2VEC_MODEL_PATH)})")
-            # Add detailed checks like in the inference worker if needed
-            raise FileNotFoundError("Essential search data files not found after download.")
-
-    except Exception as e:
-        print(f"Failed to download or extract search data: {e}")
-        raise
-
 # --- Global Variables for Search Data ---
 card_embeddings = None
 doc2vec_model = None
-cards = None # Optional, but good for checking search results against known names
 
 def load_search_data():
     """Loads only the data required for the search functionality."""
-    global card_embeddings, doc2vec_model, cards
+    global card_embeddings, doc2vec_model
 
     # ensure_search_data_downloaded() # Removed: Handled by Dockerfile build
+    # Download is handled by Dockerfile now.
 
     print("Loading search data...")
     # Load Embeddings
@@ -199,7 +89,7 @@ def load_search_data():
 
 
 # --- Flask App Initialization ---
-app = Flask(__name__)
+app = Flask(__name__, template_folder='/templates', static_folder='/static')
 app.logger.setLevel(logging.INFO)
 
 # Load search data when the app starts
@@ -241,15 +131,10 @@ def parse_deck_input(deck_text):
             count = int(match.group(1))
             name = match.group(2).strip()
             if count > 0 and name:
-                # Simple check if name seems plausible (optional)
-                # if cards and name not in cards and name not in card_embeddings:
-                #    raise ValueError(f"Warning: Card name '{name}' not found in local data. Check spelling or format.")
                 parsed_cards.append({"name": name, "count": count})
         else:
             name = line.strip()
             if name:
-                 # if cards and name not in cards and name not in card_embeddings:
-                 #     raise ValueError(f"Warning: Card name '{name}' not found in local data. Check spelling or format.")
                  parsed_cards.append({"name": name, "count": 1})
 
     card_counts = Counter()
@@ -262,7 +147,6 @@ def parse_deck_input(deck_text):
 image_cache = {}
 def get_card_image_urls(card_names):
     """Fetches image URLs from Scryfall for a list of card names."""
-    # ... (Keep the same implementation as in rp_handler.py) ...
     urls = {}
     names_to_fetch = set()
     name_map = {} # Maps the part sent to Scryfall back to the original full name

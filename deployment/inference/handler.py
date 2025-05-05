@@ -6,7 +6,6 @@ import pickle
 import math
 import time
 import logging
-import subprocess
 from collections import Counter
 import torch
 import torch.nn as nn
@@ -14,8 +13,8 @@ import torch.nn.functional as F
 import runpod
 
 # --- Configuration ---
-MODEL_DIR = "/pretrained/models"
-DATA_DIR = "/pretrained/data"
+MODEL_DIR = "/models"
+DATA_DIR = "/data"
 DIFFUSION_MODEL_PATH = os.path.join(MODEL_DIR, "diffusion_model.pth")
 CLASSIFIER_PATH = os.path.join(MODEL_DIR, "card_classifier.pt")
 EMBEDDINGS_PATH = os.path.join(DATA_DIR, "card_embeddings.pkl")
@@ -41,85 +40,6 @@ DEFAULT_FORMAT = 'modern'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Helper Functions ---
-
-def download_and_extract_gdrive_folder(folder_id, destination_dir):
-    """Downloads and extracts files from a public Google Drive folder using gdown."""
-    print(f"Attempting to download files from Google Drive folder: {folder_id} using gdown...")
-    # Construct the GDrive folder URL
-    folder_url = f'https://drive.google.com/drive/folders/{folder_id}'
-
-    try:
-        gdown_command = [
-            'gdown',
-            '--folder',
-            folder_url,
-            '-O', destination_dir, # Output to destination_dir
-            '--quiet' # Reduce console noise
-        ]
-        print(f"Running command: {' '.join(gdown_command)}")
-        result = subprocess.run(gdown_command, capture_output=True, text=True, check=False)
-
-        if result.returncode != 0:
-           raise Exception(f"gdown failed to download folder {folder_id}. Check permissions and URL.")
-        else:
-            print(f"gdown download successful (stdout): {result.stdout}")
-    except FileNotFoundError:
-        print("Error: 'gdown' command not found. Is gdown installed correctly?")
-        raise
-    except Exception as e:
-        print(f"An unexpected error occurred during gdown execution or extraction: {e}")
-        raise
-
-def ensure_models_downloaded():
-    """Checks if models exist, downloads and extracts them if not."""
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    # Check if essential files exist
-    models_exist = os.path.exists(DIFFUSION_MODEL_PATH) and \
-                   os.path.exists(CLASSIFIER_PATH)
-    data_exist = os.path.exists(EMBEDDINGS_PATH) and \
-                 os.path.exists(ATOMIC_CARDS_PATH)
-
-    if models_exist and data_exist:
-        print("Models and data files already exist. Skipping download.")
-        return
-
-    print("Models or data files missing. Attempting download from Google Drive...")
-    # Download to a temporary location or directly if extraction handles paths correctly
-    # Let's download to the parent directory '/' and let extraction place them
-    try:
-        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/pretrained")
-        print("Download and extraction complete.")
-        # Verify again after download attempt
-        if not (os.path.exists(DIFFUSION_MODEL_PATH) and \
-                os.path.exists(CLASSIFIER_PATH) and \
-                os.path.exists(EMBEDDINGS_PATH) and \
-                os.path.exists(ATOMIC_CARDS_PATH)):
-            print("Error: Essential files still missing after download attempt.")
-            print(f"Expected Diffusion Model at: {DIFFUSION_MODEL_PATH} (Exists: {os.path.exists(DIFFUSION_MODEL_PATH)})")
-            print(f"Expected Classifier at: {CLASSIFIER_PATH} (Exists: {os.path.exists(CLASSIFIER_PATH)})")
-            print(f"Expected Embeddings at: {EMBEDDINGS_PATH} (Exists: {os.path.exists(EMBEDDINGS_PATH)})")
-            print(f"Expected Atomic Cards at: {ATOMIC_CARDS_PATH} (Exists: {os.path.exists(ATOMIC_CARDS_PATH)})")
-
-            print("\nListing contents of /models:")
-            if os.path.exists(MODEL_DIR):
-                print(os.listdir(MODEL_DIR))
-            else:
-                print("/models directory does not exist.")
-
-            print("\nListing contents of /data:")
-            if os.path.exists(DATA_DIR):
-                 print(os.listdir(DATA_DIR))
-            else:
-                 print("/data directory does not exist.")
-
-            raise FileNotFoundError("Essential model/data files not found after download.")
-
-    except Exception as e:
-        print(f"Failed to download or extract models: {e}")
-        raise # Propagate the error to stop the worker if models are missing
-
 
 def cosine_beta_schedule(T, s=0.008):
     """Cosine variance schedule"""
@@ -1211,7 +1131,7 @@ def handler(event):
 if __name__ == '__main__':
     print("Starting RunPod Serverless Worker...")
     try:
-        load_models_and_data() # Load models globally when the worker starts
+        load_models_and_data()
         print("Models loaded. Starting serverless handler...")
         runpod.serverless.start({"handler": handler})
     except Exception as e:
