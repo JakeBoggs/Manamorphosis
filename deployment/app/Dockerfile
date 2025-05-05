@@ -1,17 +1,16 @@
 FROM python:3.10-slim
 
-WORKDIR /
+WORKDIR /app
 
 # Use --no-cache-dir to reduce image size
-RUN pip install --no-cache-dir -r Flask gensim nltk requests numpy scipy pickle5 waitress gdown
+RUN pip install --no-cache-dir Flask gensim nltk requests numpy scipy pickle5 waitress gdown
 
-# Copy application code and templates
-COPY deployment/app /app
-COPY templates /templates
-COPY static /static
+# Copy application code (source is '.', the build context) into WORKDIR (/app)
+COPY . .
 
-# Set working directory to the app code
-WORKDIR /app
+# Copy templates and static directories from parent directories relative to build context
+COPY ../../templates /templates
+COPY ../../static /static
 
 # --- Data Download ---
 RUN python -c "import app; app.ensure_search_data_downloaded()"

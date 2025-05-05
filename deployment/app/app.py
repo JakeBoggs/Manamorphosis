@@ -27,8 +27,8 @@ except LookupError:
 
 # --- Configuration ---
 # Paths relative to the container's WORKDIR ('/')
-MODEL_DIR = "/models"
-DATA_DIR = "/data"
+MODEL_DIR = "/pretrained/models"
+DATA_DIR = "/pretrained/data"
 EMBEDDINGS_PATH = os.path.join(DATA_DIR, "card_embeddings.pkl") # Needed for search
 DOC2VEC_MODEL_PATH = os.path.join(MODEL_DIR, "embedding_model") # Needed for search
 

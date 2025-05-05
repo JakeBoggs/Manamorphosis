@@ -15,8 +15,8 @@ import runpod
 
 # --- Configuration ---
 # These paths will be relative to the container's WORKDIR ('/')
-MODEL_DIR = "/models"
-DATA_DIR = "/data"
+MODEL_DIR = "/pretrained/models"
+DATA_DIR = "/pretrained/data"
 DIFFUSION_MODEL_PATH = os.path.join(MODEL_DIR, "diffusion_model.pth")
 CLASSIFIER_PATH = os.path.join(MODEL_DIR, "card_classifier.pt")
 EMBEDDINGS_PATH = os.path.join(DATA_DIR, "card_embeddings.pkl")
@@ -92,7 +92,7 @@ def ensure_models_downloaded():
     # Download to a temporary location or directly if extraction handles paths correctly
     # Let's download to the parent directory '/' and let extraction place them
     try:
-        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/") # Download to root
+        download_and_extract_gdrive_folder(GDRIVE_FOLDER_ID, "/pretrained") # Download to root
         print("Download and extraction complete.")
         # Verify again after download attempt
         if not (os.path.exists(DIFFUSION_MODEL_PATH) and \

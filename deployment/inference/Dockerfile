@@ -22,6 +22,6 @@ RUN curl -L -o /data/AtomicCards.json https://mtgjson.com/api/v5/AtomicCards.jso
 # Download other models/data using the script function
 RUN python -c "import handler; handler.ensure_models_downloaded()"
 
-# Run rp_handler.py when the container launches
+# Run handler.py when the container launches
 # The -u flag ensures that print statements are sent straight to stdout without being buffered
 CMD ["python3", "-u", "handler.py"] 
